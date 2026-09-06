@@ -27,6 +27,16 @@ export function Settings({ token, config, login, onSave, onCancel, onSignOut }: 
 
   const remoteNames = useMemo(() => new Set(remote?.map((b) => b.name)), [remote])
 
+  const suggestions = useMemo(() => {
+    if (!remote) return []
+    const taken = new Set([
+      ...draft.devBranches.map((b) => b.trim()),
+      draft.devBranch.trim(),
+      draft.prodBranch.trim(),
+    ])
+    return remote.map((b) => b.name).filter((n) => !taken.has(n))
+  }, [remote, draft.devBranches, draft.devBranch, draft.prodBranch])
+
   // A repo the user has already typed in full is worth verifying immediately,
   // so the branch pickers can offer real names.
   useEffect(() => {
@@ -109,25 +119,41 @@ export function Settings({ token, config, login, onSave, onCancel, onSignOut }: 
         <div className="field-group">
           <label>Repository</label>
           <div className="row">
-            <input
-              type="text"
-              placeholder="owner"
-              aria-label="Repository owner"
-              autoCapitalize="none"
-              spellCheck={false}
-              value={draft.owner}
-              onChange={(e) => set('owner', e.target.value)}
-            />
-            <input
-              type="text"
-              placeholder="repository"
-              aria-label="Repository name"
-              autoCapitalize="none"
-              spellCheck={false}
-              value={draft.repo}
-              onChange={(e) => set('repo', e.target.value)}
-            />
+            <div className="field-group">
+              <label htmlFor="owner" className="sublabel">Owner</label>
+              <input
+                id="owner"
+                type="text"
+                placeholder="e.g. Aleena24"
+                autoCapitalize="none"
+                spellCheck={false}
+                value={draft.owner}
+                onChange={(e) => set('owner', e.target.value)}
+              />
+            </div>
+            <div className="field-group">
+              <label htmlFor="repo" className="sublabel">Repository name</label>
+              <input
+                id="repo"
+                type="text"
+                placeholder="e.g. CelerSCET"
+                autoCapitalize="none"
+                spellCheck={false}
+                value={draft.repo}
+                onChange={(e) => set('repo', e.target.value)}
+              />
+            </div>
           </div>
+          {owner || repo ? (
+            <span className="hint">
+              Will use <span className="mono" style={{ color: 'var(--text)' }}>
+                {owner || 'owner'}/{repo || 'repository'}
+              </span>
+              {owner && repo && owner === repo
+                ? ' — both boxes match, which is unusual. The second box is the repository name, not the owner again.'
+                : ''}
+            </span>
+          ) : null}
           <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginTop: 2 }}>
             <button
               type="button"
@@ -246,6 +272,28 @@ export function Settings({ token, config, login, onSave, onCancel, onSignOut }: 
               Add
             </button>
           </div>
+
+          {suggestions.length ? (
+            <div style={{ marginTop: 10 }}>
+              <span className="hint">Branches in this repository — tap to add:</span>
+              <div className="suggest-row">
+                {suggestions.map((name) => (
+                  <button
+                    key={name}
+                    type="button"
+                    className="small suggest mono"
+                    onClick={() => addBranch(name)}
+                  >
+                    + {name}
+                  </button>
+                ))}
+              </div>
+            </div>
+          ) : remote && !suggestions.length && draft.devBranches.length ? (
+            <span className="hint" style={{ marginTop: 8 }}>
+              Every branch in this repository is already accounted for.
+            </span>
+          ) : null}
         </div>
 
         <div className="row" style={{ marginTop: 4 }}>

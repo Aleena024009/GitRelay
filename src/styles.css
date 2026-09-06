@@ -472,3 +472,10 @@ a { color: var(--info); }
 /* A zero count is not news; only non-zero ahead/behind earns colour. */
 .counts .zero { color: var(--muted); }
 .file-list .delta span:not(.a):not(.d) { color: var(--muted); }
+
+/* Sub-labels inside a grouped field (Owner / Repository name). */
+.field-group .sublabel { font-size: 12px; font-weight: 500; color: var(--muted); }
+
+/* Tap-to-add list of the repository's real branch names. */
+.suggest-row { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 6px; }
+.suggest-row .suggest { font-weight: 500; }

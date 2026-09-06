@@ -170,12 +170,24 @@ export interface RepoInfo {
 }
 
 export async function getRepo(token: string, ref: RepoRef): Promise<RepoInfo> {
+  const slug = `${ref.owner}/${ref.repo}`
   const data = await request<{
     full_name: string
     default_branch: string
     private: boolean
     permissions?: { push?: boolean; admin?: boolean }
-  }>(token, `/repos/${ref.owner}/${ref.repo}`, `${ref.owner}/${ref.repo}`)
+  }>(token, `/repos/${ref.owner}/${ref.repo}`, slug).catch((err: unknown) => {
+    // GitHub answers 404 rather than 403 for private repositories a token
+    // cannot see, so a "missing" repo is usually really a missing grant.
+    if (err instanceof GitRelayError && err.kind === 'not_found') {
+      throw new GitRelayError(
+        'not_found',
+        `Could not open ${slug}. Either the name is wrong, or — if the repository is private — your token has not been granted access to it. Open the token on GitHub, set Repository access to "Only select repositories", and add ${slug}.`,
+        { detail: err.detail, status: err.status },
+      )
+    }
+    throw err
+  })
   return {
     fullName: data.full_name,
     defaultBranch: data.default_branch,
