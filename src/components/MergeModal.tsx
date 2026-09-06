@@ -39,7 +39,7 @@ interface Preview {
   targetDate: string
 }
 
-type Phase = 'loading' | 'ready' | 'merging' | 'conflict' | 'stale'
+type Phase = 'loading' | 'ready' | 'merging' | 'conflict' | 'refused' | 'stale'
 
 export function MergeModal({
   token,
@@ -133,11 +133,14 @@ export function MergeModal({
       onMerged(result, source, target)
     } catch (err) {
       const e = asGitRelayError(err)
+      setError(e)
       if (e.kind === 'conflict') {
-        setError(e)
         setPhase('conflict')
+      } else if (e.kind === 'protected_branch') {
+        // GitHub refused the write itself. Retrying cannot help, so the
+        // dialog closes off the same way a conflict does.
+        setPhase('refused')
       } else {
-        setError(e)
         setPhase('ready')
       }
     }
@@ -147,7 +150,7 @@ export function MergeModal({
   const readiness = cmp ? readinessOf(cmp) : null
   const verdict = mergeability ? summarizeMergeability(mergeability, source, target) : null
   const busy = phase === 'loading' || phase === 'merging'
-  const blocked = phase === 'conflict' || phase === 'stale'
+  const blocked = phase === 'conflict' || phase === 'refused' || phase === 'stale'
   const canConfirm =
     !busy && !blocked && !!cmp && cmp.aheadBy > 0 && !error && !verdict?.blocking
 
@@ -219,7 +222,26 @@ export function MergeModal({
         </Notice>
       ) : null}
 
-      {error && phase !== 'conflict' ? <ErrorNotice error={error} /> : null}
+      {phase === 'refused' && error ? (
+        <>
+          <ErrorNotice error={error} />
+          <p className="muted small-text">
+            A merge commit pushed straight to <span className="mono">{target}</span> is not what
+            that rule allows.{' '}
+            <a
+              href={`${repoUrl}/compare/${encodeURIComponent(target)}...${encodeURIComponent(source)}`}
+              target="_blank"
+              rel="noreferrer noopener"
+            >
+              Open a pull request
+            </a>{' '}
+            from <span className="mono">{source}</span> into <span className="mono">{target}</span>{' '}
+            on GitHub and merge it there.
+          </p>
+        </>
+      ) : error && phase !== 'conflict' ? (
+        <ErrorNotice error={error} />
+      ) : null}
 
       {cmp && !busy ? (
         <>

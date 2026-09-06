@@ -114,6 +114,17 @@ async function toError(res: Response, subject: string): Promise<GitRelayError> {
   }
 
   if (res.status === 409) {
+    // A 409 is not always a conflict. GitHub refuses a direct merge into a
+    // protected branch with this same status, and calling that a "conflict"
+    // sends people hunting for conflicting changes that do not exist.
+    if (/protected branch/i.test(apiMessage)) {
+      const reason = apiMessage.replace(/\s+/g, ' ').trim()
+      return new GitRelayError(
+        'protected_branch',
+        `GitHub refused this merge — ${reason} Nothing was changed. This is a branch protection rule on the target branch, not a conflict between the branches.`,
+        { detail, status: res.status },
+      )
+    }
     return new GitRelayError('conflict', 'The branches have conflicts and cannot be merged automatically.', {
       detail,
       status: res.status,

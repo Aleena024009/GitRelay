@@ -49,6 +49,8 @@ function errorTitle(kind: GitRelayError['kind']): string {
       return 'Rate limit reached'
     case 'conflict':
       return 'Merge conflict'
+    case 'protected_branch':
+      return 'Blocked by branch protection'
     case 'stale':
       return 'Branch changed'
     default:
