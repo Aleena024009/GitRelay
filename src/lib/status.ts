@@ -23,14 +23,16 @@ export function readinessOf(comparison: Comparison): Readiness {
   return comparison.status === 'diverged' ? 'unverified' : 'clean'
 }
 
-export function readinessLabel(readiness: Readiness, target: string): string {
+export function readinessLabel(readiness: Readiness): string {
   switch (readiness) {
     case 'clean':
       return 'Ready to merge'
     case 'unverified':
-      return 'Diverged — conflicts possible'
+      return 'Diverged'
+    // Deliberately not "up to date": such a branch is often far behind the
+    // target. What is true is that it holds nothing the target lacks.
     case 'nothing_to_merge':
-      return `Up to date with ${target}`
+      return 'Nothing to merge'
     case 'missing':
       return 'Branch not found'
   }

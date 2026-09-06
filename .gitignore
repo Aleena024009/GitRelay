@@ -9,3 +9,6 @@ dist-ssr
 .env.*
 !.env.example
 .directory
+
+# A local clone of this same repo someone dropped in here; not part of the project
+/GitRelay/

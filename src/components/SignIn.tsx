@@ -34,16 +34,18 @@ export function SignIn({ onSignedIn }: SignInProps) {
 
   return (
     <div className="card">
-      <h2 style={{ marginTop: 0, fontSize: 17 }}>Connect to GitHub</h2>
-      <p className="muted small-text" style={{ marginTop: 4 }}>
+      <div className="card-head">
+        <h2>Connect to GitHub</h2>
+      </div>
+      <p className="hint">
         GitRelay runs entirely in your browser with no server of its own, so it uses a GitHub
         access token that you provide. The token is stored only on this device and is never sent
         anywhere except to GitHub.
       </p>
 
-      {error ? <div style={{ marginTop: 14 }}><ErrorNotice error={error} /></div> : null}
+      <form className="form" onSubmit={submit} style={{ marginTop: 18 }}>
+        {error ? <ErrorNotice error={error} /> : null}
 
-      <form className="form" onSubmit={submit} style={{ marginTop: 16 }}>
         <div className="field-group">
           <label htmlFor="token">Fine-grained personal access token</label>
           <input
@@ -51,16 +53,21 @@ export function SignIn({ onSignedIn }: SignInProps) {
             type="password"
             className="mono"
             autoComplete="off"
+            autoCapitalize="none"
+            autoCorrect="off"
             spellCheck={false}
-            placeholder="github_pat_..."
+            placeholder="github_pat_…"
             value={token}
             onChange={(e) => setToken(e.target.value)}
           />
           <span className="hint">
-            <a href={TOKEN_URL} target="_blank" rel="noreferrer noopener">Create one on GitHub</a>
-            {' '}with access limited to the single repository you consolidate, and only these
+            <a href={TOKEN_URL} target="_blank" rel="noreferrer noopener">
+              Create one on GitHub
+            </a>{' '}
+            with access limited to the single repository you consolidate, and only these
             permissions: <strong>Contents: Read and write</strong> and{' '}
-            <strong>Metadata: Read-only</strong>. Nothing else is needed.
+            <strong>Metadata: Read-only</strong>. A private repository must be selected explicitly
+            in the token's repository list.
           </span>
         </div>
 
@@ -74,7 +81,11 @@ export function SignIn({ onSignedIn }: SignInProps) {
         </label>
 
         <button type="submit" className="primary block" disabled={!token.trim() || busy}>
-          {busy ? <span className="icon-btn"><span className="spinner" /> Verifying…</span> : 'Continue'}
+          {busy ? (
+            <span className="btn-inner"><span className="spinner" /> Verifying…</span>
+          ) : (
+            'Continue'
+          )}
         </button>
       </form>
     </div>

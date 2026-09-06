@@ -15,7 +15,7 @@ export function Notice({ tone, title, children, detail }: NoticeProps) {
   return (
     <div className={`notice ${tone}`} role={tone === 'error' ? 'alert' : 'status'}>
       <div className="notice-title">
-        <span aria-hidden="true">{GLYPH[tone]}</span>
+        <span className="glyph" aria-hidden="true">{GLYPH[tone]}</span>
         <span>{title}</span>
       </div>
       {children ? <p>{children}</p> : null}

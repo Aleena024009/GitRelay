@@ -1,4 +1,5 @@
 import { canMerge, readinessLabel, relativeTime, type BranchStatus } from '../lib/status'
+import { ArrowDownIcon, ArrowUpIcon, ExternalIcon } from './Icons'
 
 interface BranchRowProps {
   status: BranchStatus
@@ -19,13 +20,21 @@ export function BranchRow({ status, target, repoUrl, onMerge }: BranchRowProps) 
   const mergeable = canMerge(status.readiness)
 
   return (
-    <div className={`branch${status.readiness === 'missing' ? ' is-missing' : ''}`}>
+    <div
+      className={[
+        'branch',
+        status.readiness === 'clean' ? 'is-ready' : '',
+        status.readiness === 'missing' ? 'is-missing' : '',
+      ]
+        .filter(Boolean)
+        .join(' ')}
+    >
       <div className="branch-main">
         <div className="branch-name">
           <span className="mono">{status.name}</span>
           <span className={`pill ${PILL_TONE[status.readiness]}`}>
             {status.readiness === 'clean' ? '✓ ' : null}
-            {readinessLabel(status.readiness, target)}
+            {readinessLabel(status.readiness)}
           </span>
         </div>
 
@@ -34,17 +43,24 @@ export function BranchRow({ status, target, repoUrl, onMerge }: BranchRowProps) 
         ) : comparison ? (
           <div className="branch-meta">
             <span className="counts">
-              <span className={comparison.aheadBy ? 'ahead' : 'zero'}>
-                {comparison.aheadBy} ahead
+              <span className={`c ahead${comparison.aheadBy ? '' : ' zero'}`}>
+                <ArrowUpIcon />
+                {comparison.aheadBy}
               </span>
-              <span className={comparison.behindBy ? 'behind' : 'zero'}>
-                {comparison.behindBy} behind
+              <span className={`c behind${comparison.behindBy ? '' : ' zero'}`}>
+                <ArrowDownIcon />
+                {comparison.behindBy}
               </span>
             </span>
-            {status.latestDate ? <span>· {relativeTime(status.latestDate)}</span> : null}
+            {status.latestDate ? (
+              <>
+                <span className="dot" aria-hidden="true">•</span>
+                <span>{relativeTime(status.latestDate)}</span>
+              </>
+            ) : null}
           </div>
         ) : (
-          <div className="branch-meta"><span className="skeleton" style={{ width: 140 }} /></div>
+          <div className="branch-meta"><span className="skeleton" style={{ width: 130 }} /></div>
         )}
 
         {status.latestMessage ? (
@@ -60,15 +76,16 @@ export function BranchRow({ status, target, repoUrl, onMerge }: BranchRowProps) 
             Merge to {target}
           </button>
         ) : status.readiness === 'missing' ? (
-          <button type="button" disabled>View</button>
+          <button className="subtle" disabled>Unavailable</button>
         ) : (
           <a
             className="btn-a"
             href={`${repoUrl}/tree/${encodeURIComponent(status.name)}`}
             target="_blank"
             rel="noreferrer noopener"
+            title={`Open ${status.name} on GitHub`}
           >
-            View
+            View <ExternalIcon />
           </a>
         )}
       </div>

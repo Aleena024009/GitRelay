@@ -1,14 +1,17 @@
-import { useCallback, useEffect, useMemo, useState } from 'react'
+import { useCallback, useEffect, useMemo, useState, type ReactNode } from 'react'
 import { compareBranches, getBranch, listBranches, type MergeResult } from './lib/github'
 import { asGitRelayError, GitRelayError } from './lib/errors'
 import { emptyConfig, isConfigured, loadConfig, saveConfig, type Config } from './lib/config'
 import { clearToken, loadToken, saveToken } from './lib/auth'
+import { useInstall } from './lib/install'
 import { canMerge, readinessOf, relativeTime, type BranchStatus } from './lib/status'
 import { SignIn } from './components/SignIn'
 import { Settings } from './components/Settings'
 import { BranchRow } from './components/BranchRow'
 import { MergeModal } from './components/MergeModal'
+import { InstallModal } from './components/InstallModal'
 import { ErrorNotice, Notice } from './components/Notice'
+import { DownloadIcon, RefreshIcon, SettingsIcon } from './components/Icons'
 
 interface MergeTarget {
   source: string
@@ -28,6 +31,7 @@ export default function App() {
   const [login, setLogin] = useState<string | null>(null)
   const [config, setConfig] = useState<Config>(() => loadConfig())
   const [showSettings, setShowSettings] = useState(false)
+  const [showInstall, setShowInstall] = useState(false)
 
   const [statuses, setStatuses] = useState<BranchStatus[] | null>(null)
   const [release, setRelease] = useState<BranchStatus | null>(null)
@@ -36,8 +40,12 @@ export default function App() {
   const [pending, setPending] = useState<MergeTarget | null>(null)
   const [success, setSuccess] = useState<Success | null>(null)
 
+  const install = useInstall()
   const configured = isConfigured(config)
-  const repoRef = useMemo(() => ({ owner: config.owner, repo: config.repo }), [config.owner, config.repo])
+  const repoRef = useMemo(
+    () => ({ owner: config.owner, repo: config.repo }),
+    [config.owner, config.repo],
+  )
   const repoUrl = `https://github.com/${config.owner}/${config.repo}`
 
   const signOut = useCallback(() => {
@@ -148,7 +156,16 @@ export default function App() {
     } finally {
       setLoading(false)
     }
-  }, [token, configured, repoRef, config.devBranches, config.devBranch, config.prodBranch, statusFor, signOut])
+  }, [
+    token,
+    configured,
+    repoRef,
+    config.devBranches,
+    config.devBranch,
+    config.prodBranch,
+    statusFor,
+    signOut,
+  ])
 
   useEffect(() => {
     void refresh()
@@ -175,17 +192,40 @@ export default function App() {
     void refresh()
   }
 
+  const installButton = (
+    <button
+      className="icon-button"
+      onClick={() => setShowInstall(true)}
+      title={install.isInstalled ? 'App installed' : 'Download app'}
+      aria-label={install.isInstalled ? 'App installed' : 'Download app'}
+    >
+      <DownloadIcon />
+    </button>
+  )
+
+  const installModal = showInstall ? (
+    <InstallModal
+      platform={install.platform}
+      browser={install.browser}
+      canPrompt={install.canPrompt}
+      isInstalled={install.isInstalled}
+      onInstall={install.promptInstall}
+      onClose={() => setShowInstall(false)}
+    />
+  ) : null
+
   if (!token) {
     return (
-      <Shell>
+      <Shell actions={installButton}>
         <SignIn onSignedIn={handleSignedIn} />
+        {installModal}
       </Shell>
     )
   }
 
   if (showSettings || !configured) {
     return (
-      <Shell>
+      <Shell actions={installButton}>
         <Settings
           token={token}
           config={configured ? config : { ...emptyConfig, ...config }}
@@ -194,6 +234,7 @@ export default function App() {
           onCancel={configured ? () => setShowSettings(false) : null}
           onSignOut={signOut}
         />
+        {installModal}
       </Shell>
     )
   }
@@ -205,10 +246,24 @@ export default function App() {
     <Shell
       actions={
         <>
-          <button className="ghost small" onClick={() => void refresh()} disabled={loading}>
-            {loading ? <span className="spinner" /> : 'Refresh'}
+          <button
+            className={`icon-button${loading ? ' is-busy' : ''}`}
+            onClick={() => void refresh()}
+            disabled={loading}
+            title="Refresh branch status"
+            aria-label="Refresh branch status"
+          >
+            {loading ? <span className="spinner" /> : <RefreshIcon />}
           </button>
-          <button className="ghost small" onClick={() => setShowSettings(true)}>Settings</button>
+          <button
+            className="icon-button"
+            onClick={() => setShowSettings(true)}
+            title="Settings"
+            aria-label="Settings"
+          >
+            <SettingsIcon />
+          </button>
+          {installButton}
         </>
       }
     >
@@ -232,37 +287,46 @@ export default function App() {
       </div>
 
       {success ? (
-        <Notice
-          tone="success"
-          title={success.result ? 'Successfully merged' : 'Already up to date'}
-        >
-          {success.result ? (
-            <>
-              <span className="mono">{success.source}</span> → <span className="mono">{success.target}</span>
-              {' · '}
-              <a href={success.result.htmlUrl} target="_blank" rel="noreferrer noopener" className="mono">
-                {success.result.sha.slice(0, 7)}
-              </a>
-              {' · '}
-              {relativeTime(success.at)}
-              {'. '}
-              <span className="mono">{success.source}</span> was not modified.
-            </>
-          ) : (
-            <>
-              <span className="mono">{success.target}</span> already contained everything on{' '}
-              <span className="mono">{success.source}</span>. Nothing was changed.
-            </>
-          )}
-        </Notice>
+        <div style={{ marginTop: 14 }}>
+          <Notice
+            tone="success"
+            title={success.result ? 'Successfully merged' : 'Already up to date'}
+          >
+            {success.result ? (
+              <>
+                <span className="mono">{success.source}</span> →{' '}
+                <span className="mono">{success.target}</span> ·{' '}
+                <a
+                  href={success.result.htmlUrl}
+                  target="_blank"
+                  rel="noreferrer noopener"
+                  className="mono"
+                >
+                  {success.result.sha.slice(0, 7)}
+                </a>{' '}
+                · {relativeTime(success.at)}. <span className="mono">{success.source}</span> was
+                not modified.
+              </>
+            ) : (
+              <>
+                <span className="mono">{success.target}</span> already contained everything on{' '}
+                <span className="mono">{success.source}</span>. Nothing was changed.
+              </>
+            )}
+          </Notice>
+        </div>
       ) : null}
 
-      {error ? <ErrorNotice error={error} /> : null}
+      {error ? (
+        <div style={{ marginTop: 14 }}>
+          <ErrorNotice error={error} />
+        </div>
+      ) : null}
 
       <div className="section-title">
         <span>Developer branches</span>
         <span className="spacer" />
-        {statuses ? <span>{statuses.length}</span> : null}
+        {statuses ? <span className="count">{statuses.length}</span> : null}
       </div>
 
       {!statuses && loading ? (
@@ -270,16 +334,20 @@ export default function App() {
           {[0, 1, 2].map((i) => (
             <div className="branch" key={i}>
               <div className="branch-main stack">
-                <span className="skeleton" style={{ width: '35%' }} />
-                <span className="skeleton" style={{ width: '55%' }} />
+                <span className="skeleton" style={{ width: '38%' }} />
+                <span className="skeleton" style={{ width: '58%' }} />
               </div>
             </div>
           ))}
         </div>
       ) : statuses && statuses.length === 0 ? (
         <div className="empty">
-          No developer branches configured.{' '}
-          <button className="ghost small" onClick={() => setShowSettings(true)}>Add branches</button>
+          No developer branches configured yet.
+          <div style={{ marginTop: 12 }}>
+            <button className="subtle small" onClick={() => setShowSettings(true)}>
+              Add branches
+            </button>
+          </div>
         </div>
       ) : (
         <div className="branch-list">
@@ -299,9 +367,10 @@ export default function App() {
       )}
 
       <div className="release">
-        <div className="release-summary">
-          <span>
-            <span className="mono">{config.devBranch}</span> →{' '}
+        <div className="release-head">
+          <span className="release-flow">
+            <span className="mono">{config.devBranch}</span>
+            <span className="arrow" aria-hidden="true">→</span>
             <span className="mono">{config.prodBranch}</span>
           </span>
           {release?.error ? (
@@ -309,23 +378,23 @@ export default function App() {
           ) : releaseCmp ? (
             <>
               <span className="counts">
-                <span className={releaseCmp.aheadBy ? 'ahead' : 'zero'}>
+                <span className={`c ahead${releaseCmp.aheadBy ? '' : ' zero'}`}>
                   {releaseCmp.aheadBy} ahead
                 </span>
-                <span className={releaseCmp.behindBy ? 'behind' : 'zero'}>
+                <span className={`c behind${releaseCmp.behindBy ? '' : ' zero'}`}>
                   {releaseCmp.behindBy} behind
                 </span>
               </span>
               {releaseCmp.aheadBy === 0 ? (
                 <span className="pill mute">Nothing to release</span>
               ) : releaseCmp.status === 'diverged' ? (
-                <span className="pill warn">Diverged — conflicts possible</span>
+                <span className="pill warn">Diverged</span>
               ) : (
-                <span className="pill ok">✓ Ready to release</span>
+                <span className="pill ok">✓ Ready</span>
               )}
             </>
           ) : (
-            <span className="skeleton" style={{ width: 120 }} />
+            <span className="skeleton" style={{ width: 110 }} />
           )}
         </div>
         <button
@@ -352,17 +421,27 @@ export default function App() {
           onMerged={handleMerged}
         />
       ) : null}
+      {installModal}
     </Shell>
   )
 }
 
-function Shell({ children, actions }: { children: React.ReactNode; actions?: React.ReactNode }) {
+function Shell({ children, actions }: { children: ReactNode; actions?: ReactNode }) {
+  const [scrolled, setScrolled] = useState(false)
+
+  useEffect(() => {
+    const onScroll = () => setScrolled(window.scrollY > 4)
+    onScroll()
+    window.addEventListener('scroll', onScroll, { passive: true })
+    return () => window.removeEventListener('scroll', onScroll)
+  }, [])
+
   return (
     <div className="app">
-      <header className="header">
+      <header className={`header${scrolled ? ' scrolled' : ''}`}>
         <img className="logo" src={`${import.meta.env.BASE_URL}icons/icon-192.png`} alt="" />
         <h1>GitRelay</h1>
-        {actions}
+        <div className="header-actions">{actions}</div>
       </header>
       {children}
     </div>

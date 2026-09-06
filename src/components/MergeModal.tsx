@@ -141,7 +141,7 @@ export function MergeModal({
       onClose={onClose}
       dismissable={phase !== 'merging'}
       head={
-        <div className="flow">
+        <div className="modal-flow">
           <span className="muted">Source</span>
           <span className="mono"><strong>{source}</strong></span>
           <span className="arrow" aria-hidden="true">→</span>
@@ -247,14 +247,17 @@ export function MergeModal({
             </Notice>
           ) : null}
 
-          <div className="subhead">Current {target}</div>
-          <div className="muted small-text">
-            <span className="mono">{preview?.targetSha.slice(0, 7)}</span> · {preview?.targetLatest}
-            {preview?.targetDate ? ` · ${relativeTime(preview.targetDate)}` : ''}
+          <div className="section-block">
+            <div className="subhead">Current {target}</div>
+            <div className="muted small-text">
+              <span className="mono">{preview?.targetSha.slice(0, 7)}</span> ·{' '}
+              {preview?.targetLatest}
+              {preview?.targetDate ? ` · ${relativeTime(preview.targetDate)}` : ''}
+            </div>
           </div>
 
           {cmp.commits.length ? (
-            <>
+            <div className="section-block">
               <div className="subhead">
                 Commits that will be merged
                 {cmp.totalCommits > cmp.commits.length
@@ -269,7 +272,7 @@ export function MergeModal({
                   </li>
                 ))}
               </ul>
-            </>
+            </div>
           ) : null}
 
           {cmp.files.length ? (
@@ -278,7 +281,7 @@ export function MergeModal({
                 {cmp.files.length}{cmp.filesTruncated ? '+' : ''} file
                 {cmp.files.length === 1 ? '' : 's'} changed
               </summary>
-              <ul className="file-list" style={{ marginTop: 8 }}>
+              <ul className="file-list">
                 {cmp.files.map((f) => (
                   <li key={f.filename}>
                     <span className="fname mono">{f.filename}</span>
@@ -305,7 +308,7 @@ export function MergeModal({
             </details>
           ) : null}
 
-          <p className="muted small-text" style={{ marginTop: 14, marginBottom: 0 }}>
+          <p className="muted small-text">
             This creates a merge commit on <span className="mono">{target}</span>.{' '}
             <span className="mono">{source}</span> is not modified or deleted.
           </p>

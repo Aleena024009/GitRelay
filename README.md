@@ -75,14 +75,23 @@ npm run preview
 
 ## Installing as an app
 
-The build ships a manifest, icons, and a service worker, so the browser offers **Install** on Android Chrome, desktop Chrome/Edge, and "Add to Home Screen" on iOS Safari. The app shell is cached for offline launch; GitHub API calls are explicitly never cached, so a merge is never decided from stale data.
+The header carries three compact icon actions — **Refresh**, **Settings**, and **Download app**.
+
+"Download app" installs GitRelay as a real application. Where the browser supports it (Chrome, Brave, Edge on Android, Windows, macOS, Linux and ChromeOS) it installs in one click; everywhere else the dialog shows the exact steps for that platform and browser, including Safari's "Add to Home Screen" on iOS and "Add to Dock" on macOS. If Firefox on desktop is in use it says plainly that installing is not supported there.
+
+Installed, GitRelay runs in its own window with no address bar and appears in the app launcher or home screen. The app shell is cached for offline launch; GitHub API calls are explicitly never cached, so a merge is never decided from stale data.
+
+## Interface
+
+Mobile-first and responsive from 320 px upward: branch cards stack and their actions go full-width on phones, modals become bottom sheets, and every control meets a 44 px touch target. Nothing on any screen scrolls horizontally.
 
 ## How mergeability is determined
 
 GitHub has no read-only "would this merge?" endpoint that does not create a pull request, so GitRelay does not pretend otherwise:
 
 - **`✓ Ready to merge`** — `dev` has no commits the branch is missing. The merge fast-forwards and *cannot* conflict.
-- **`Diverged — conflicts possible`** — both branches moved. The confirmation dialog says so, and GitHub does the real conflict check when you confirm. If it conflicts, the merge is rejected and nothing changes.
+- **`Diverged`** — both branches moved. The confirmation dialog says so, and GitHub does the real conflict check when you confirm. If it conflicts, the merge is rejected and nothing changes.
+- **`Nothing to merge`** — the branch holds no commits that `dev` lacks. Deliberately not labelled "up to date", since such a branch is often far *behind* `dev`; the ↑/↓ counters show both directions.
 
 Immediately before writing, GitRelay re-reads both branch tips. If either moved while the dialog was open, it stops, tells you, and reloads the summary rather than merging against a stale preview.
 

@@ -3,6 +3,7 @@ import { getRepo, listBranches, type BranchRef } from '../lib/github'
 import { asGitRelayError, GitRelayError } from '../lib/errors'
 import { type Config } from '../lib/config'
 import { ErrorNotice, Notice } from './Notice'
+import { CloseIcon } from './Icons'
 
 interface SettingsProps {
   token: string
@@ -106,19 +107,19 @@ export function Settings({ token, config, login, onSave, onCancel, onSignOut }: 
 
   return (
     <div className="card">
-      <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 4 }}>
-        <h2 style={{ margin: 0, fontSize: 17, flex: 1 }}>Settings</h2>
-        {login ? <span className="muted small-text">@{login}</span> : null}
+      <div className="card-head">
+        <h2>Settings</h2>
+        {login ? <span className="muted small-text nowrap">@{login}</span> : null}
       </div>
 
       <datalist id="remote-branches">
         {remote?.map((b) => <option key={b.name} value={b.name} />)}
       </datalist>
 
-      <div className="form" style={{ marginTop: 18 }}>
+      <div className="form">
         <div className="field-group">
           <label>Repository</label>
-          <div className="row">
+          <div className="row tight">
             <div className="field-group">
               <label htmlFor="owner" className="sublabel">Owner</label>
               <input
@@ -126,6 +127,7 @@ export function Settings({ token, config, login, onSave, onCancel, onSignOut }: 
                 type="text"
                 placeholder="e.g. Aleena24"
                 autoCapitalize="none"
+                autoCorrect="off"
                 spellCheck={false}
                 value={draft.owner}
                 onChange={(e) => set('owner', e.target.value)}
@@ -138,15 +140,18 @@ export function Settings({ token, config, login, onSave, onCancel, onSignOut }: 
                 type="text"
                 placeholder="e.g. CelerSCET"
                 autoCapitalize="none"
+                autoCorrect="off"
                 spellCheck={false}
                 value={draft.repo}
                 onChange={(e) => set('repo', e.target.value)}
               />
             </div>
           </div>
+
           {owner || repo ? (
             <span className="hint">
-              Will use <span className="mono" style={{ color: 'var(--text)' }}>
+              Will use{' '}
+              <span className="mono" style={{ color: 'var(--text)' }}>
                 {owner || 'owner'}/{repo || 'repository'}
               </span>
               {owner && repo && owner === repo
@@ -154,14 +159,19 @@ export function Settings({ token, config, login, onSave, onCancel, onSignOut }: 
                 : ''}
             </span>
           ) : null}
-          <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginTop: 2 }}>
+
+          <div className="row-inline">
             <button
               type="button"
-              className="small"
+              className="subtle small"
               onClick={verify}
               disabled={!owner || !repo || checking}
             >
-              {checking ? <span className="icon-btn"><span className="spinner" /> Checking…</span> : 'Check access'}
+              {checking ? (
+                <span className="btn-inner"><span className="spinner" /> Checking…</span>
+              ) : (
+                'Check access'
+              )}
             </button>
             {checkedRepo ? (
               <span className="pill ok">✓ {checkedRepo}</span>
@@ -187,6 +197,7 @@ export function Settings({ token, config, login, onSave, onCancel, onSignOut }: 
               type="text"
               list="remote-branches"
               autoCapitalize="none"
+              autoCorrect="off"
               spellCheck={false}
               value={draft.devBranch}
               onChange={(e) => set('devBranch', e.target.value)}
@@ -199,6 +210,7 @@ export function Settings({ token, config, login, onSave, onCancel, onSignOut }: 
               type="text"
               list="remote-branches"
               autoCapitalize="none"
+              autoCorrect="off"
               spellCheck={false}
               value={draft.prodBranch}
               onChange={(e) => set('prodBranch', e.target.value)}
@@ -214,45 +226,49 @@ export function Settings({ token, config, login, onSave, onCancel, onSignOut }: 
           </span>
 
           {draft.devBranches.length ? (
-            <div className="chip-list" style={{ marginTop: 4 }}>
+            <div className="chip-list">
               {draft.devBranches.map((name, i) => {
-                const unknown = remote !== null && name.trim() !== '' && !remoteNames.has(name.trim())
+                const unknown =
+                  remote !== null && name.trim() !== '' && !remoteNames.has(name.trim())
                 return (
                   <div className="chip" key={i}>
                     <input
                       type="text"
+                      className="chip-input mono"
                       aria-label={`Developer branch ${i + 1}`}
                       autoCapitalize="none"
+                      autoCorrect="off"
                       spellCheck={false}
+                      list="remote-branches"
                       value={name}
                       onChange={(e) => renameBranch(i, e.target.value)}
-                      list="remote-branches"
-                      style={{ background: 'transparent', border: 'none', padding: 0, fontWeight: 600 }}
                     />
                     {unknown ? <span className="pill warn">not on GitHub</span> : null}
                     <button
                       type="button"
-                      className="ghost small"
+                      className="icon-button"
                       onClick={() => removeBranch(i)}
+                      title={`Remove ${name}`}
                       aria-label={`Remove ${name}`}
                     >
-                      Remove
+                      <CloseIcon size={16} />
                     </button>
                   </div>
                 )
               })}
             </div>
           ) : (
-            <div className="empty" style={{ marginTop: 4 }}>No developer branches configured yet.</div>
+            <div className="empty">No developer branches configured yet.</div>
           )}
 
-          <div className="row" style={{ marginTop: 8 }}>
+          <div className="row-inline" style={{ flexWrap: 'nowrap' }}>
             <input
               type="text"
               placeholder="Add a branch…"
               aria-label="New developer branch"
               list="remote-branches"
               autoCapitalize="none"
+              autoCorrect="off"
               spellCheck={false}
               value={newBranch}
               onChange={(e) => setNewBranch(e.target.value)}
@@ -265,7 +281,7 @@ export function Settings({ token, config, login, onSave, onCancel, onSignOut }: 
             />
             <button
               type="button"
-              className="flex-none"
+              className="subtle"
               onClick={() => addBranch(newBranch)}
               disabled={!newBranch.trim()}
             >
@@ -274,14 +290,14 @@ export function Settings({ token, config, login, onSave, onCancel, onSignOut }: 
           </div>
 
           {suggestions.length ? (
-            <div style={{ marginTop: 10 }}>
+            <div className="field-group" style={{ gap: 7 }}>
               <span className="hint">Branches in this repository — tap to add:</span>
               <div className="suggest-row">
                 {suggestions.map((name) => (
                   <button
                     key={name}
                     type="button"
-                    className="small suggest mono"
+                    className="subtle small suggest mono"
                     onClick={() => addBranch(name)}
                   >
                     + {name}
@@ -290,23 +306,24 @@ export function Settings({ token, config, login, onSave, onCancel, onSignOut }: 
               </div>
             </div>
           ) : remote && !suggestions.length && draft.devBranches.length ? (
-            <span className="hint" style={{ marginTop: 8 }}>
-              Every branch in this repository is already accounted for.
-            </span>
+            <span className="hint">Every branch in this repository is already accounted for.</span>
           ) : null}
         </div>
 
-        <div className="row" style={{ marginTop: 4 }}>
+        <div className="row">
           {onCancel ? (
-            <button type="button" onClick={onCancel}>Cancel</button>
+            <button type="button" className="subtle" onClick={onCancel}>
+              Cancel
+            </button>
           ) : null}
           <button type="button" className="primary" onClick={save} disabled={!canSave}>
             Save
           </button>
         </div>
 
-        <div className="center" style={{ borderTop: '1px solid var(--border)', paddingTop: 14 }}>
-          <button type="button" className="ghost small danger" onClick={onSignOut}>
+        <div className="divider" />
+        <div className="center">
+          <button type="button" className="danger-text small" onClick={onSignOut}>
             Sign out and forget token
           </button>
         </div>
