@@ -139,7 +139,7 @@ export function Settings({ config, login, onSave, onCancel, onSignOut }: Setting
               <input
                 id="owner"
                 type="text"
-                placeholder="e.g. Aleena24"
+                placeholder="e.g. octocat"
                 autoCapitalize="none"
                 autoCorrect="off"
                 spellCheck={false}
@@ -152,7 +152,7 @@ export function Settings({ config, login, onSave, onCancel, onSignOut }: Setting
               <input
                 id="repo"
                 type="text"
-                placeholder="e.g. CelerSCET"
+                placeholder="e.g. my-project"
                 autoCapitalize="none"
                 autoCorrect="off"
                 spellCheck={false}

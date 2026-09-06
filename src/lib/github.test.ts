@@ -10,7 +10,7 @@ import {
 } from './github'
 
 const TOKEN = 'github_pat_11EXAMPLE0000000000_abcdefghijklmnopqrstuvwxyz0123456789'
-const REF = { owner: 'Aleena24', repo: 'CelerSCET' }
+const REF = { owner: 'octocat', repo: 'example-repo' }
 
 interface Call {
   url: string

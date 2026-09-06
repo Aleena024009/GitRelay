@@ -7,12 +7,13 @@
  * runtime and kept only in this browser — never in the source or the repo.
  *
  * Storage is `sessionStorage`, deliberately, and there is no "keep me signed
- * in". GitHub Pages project sites share one origin: https://aleena24.github.io
- * serves /GitRelay/ alongside every other project page, and `localStorage` is
- * keyed by origin with no regard for path. A token in `localStorage` is
- * therefore readable by script on *any* of those sibling pages, and lives
- * until something deletes it. `sessionStorage` is scoped to a single tab and
- * dies when that tab closes, which shrinks both the window and the audience.
+ * in". GitHub Pages project sites all share one origin: a user's
+ * https://<user>.github.io serves /GitRelay/ alongside every other project
+ * page they publish, and `localStorage` is keyed by origin with no regard for
+ * path. A token in `localStorage` is therefore readable by script on *any* of
+ * those sibling pages, and lives until something deletes it. `sessionStorage`
+ * is scoped to a single tab and dies when that tab closes, which shrinks both
+ * the window and the audience.
  *
  * This is a mitigation, not isolation. Same-origin script running in the same
  * tab can still read `sessionStorage`. Only a dedicated origin fixes that

@@ -11,7 +11,7 @@ import {
 
 describe('repository names cannot escape their API path', () => {
   it('accepts real names', () => {
-    expect(repoPath({ owner: 'Aleena24', repo: 'CelerSCET' })).toBe('/repos/Aleena24/CelerSCET')
+    expect(repoPath({ owner: 'octocat', repo: 'example-repo' })).toBe('/repos/octocat/example-repo')
     expect(repoPath({ owner: 'a-b', repo: 'x.y_z-1' })).toBe('/repos/a-b/x.y_z-1')
   })
 
@@ -92,8 +92,8 @@ describe('links built from untrusted URLs', () => {
   })
 
   it('allows a real GitHub https URL', () => {
-    expect(safeGitHubUrl('https://github.com/Aleena24/CelerSCET/pull/955')).toBe(
-      'https://github.com/Aleena24/CelerSCET/pull/955',
+    expect(safeGitHubUrl('https://github.com/octocat/example-repo/pull/42')).toBe(
+      'https://github.com/octocat/example-repo/pull/42',
     )
   })
 
