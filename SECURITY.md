@@ -74,6 +74,18 @@ accepted deliberately: moving it to `sessionStorage` would force reconfiguration
 on every visit without protecting the token, which is the asset that matters.
 A dedicated origin removes this too.
 
+### 1b. Installing as a PWA changes nothing about the origin
+
+An installed PWA is not a sandbox. GitRelay installed from
+`https://<user>.github.io/GitRelay/` still runs **on that same origin** and
+shares the same storage partition as the browser, so every point above applies
+unchanged: the sibling project pages can still reach the token. Installing is a
+convenience, not a security boundary, and must not be presented as one.
+
+The session rule applies to the app window exactly as it does to a tab. Each
+PWA window is its own browsing context with its own `sessionStorage`, so
+closing the installed app clears the token and relaunching asks for it again.
+
 ### 2. Cross-site scripting
 
 React escapes interpolated values, and the codebase contains no

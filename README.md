@@ -86,6 +86,8 @@ The header carries three compact icon actions — **Refresh**, **Settings**, and
 
 Installed, GitRelay runs in its own window with no address bar and appears in the app launcher or home screen. The app shell is cached for offline launch; GitHub API calls are explicitly never cached, so a merge is never decided from stale data.
 
+Installing does not change where the app runs: the PWA is the same origin as the site, with the same storage, so it asks for your token again each time you launch it — and it gains no isolation from other pages published under that origin. See [SECURITY.md](SECURITY.md).
+
 ## Interface
 
 Mobile-first and responsive from 320 px upward: branch cards stack and their actions go full-width on phones, modals become bottom sheets, and every control meets a 44 px touch target. Nothing on any screen scrolls horizontally.

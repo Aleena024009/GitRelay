@@ -42,7 +42,7 @@ export function SignIn({ onSignedIn }: SignInProps) {
         anywhere: it is sent only to <span className="mono">api.github.com</span>.
       </p>
       <ul className="hint security-facts">
-        <li>Kept for this browser tab only, and erased when you close it.</li>
+        <li>Kept for this tab or app window only, and erased when you close it.</li>
         <li>Never written to long-term browser storage, and never put in a URL.</li>
         <li>Signing out removes it immediately.</li>
       </ul>
