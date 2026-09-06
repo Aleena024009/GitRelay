@@ -1,17 +1,16 @@
 import { useState, type FormEvent } from 'react'
-import { getViewer } from '../lib/github'
+import { verifyToken } from '../lib/github'
 import { asGitRelayError, GitRelayError } from '../lib/errors'
 import { ErrorNotice } from './Notice'
 
 interface SignInProps {
-  onSignedIn: (token: string, remember: boolean, login: string) => void
+  onSignedIn: (token: string, login: string) => void
 }
 
 const TOKEN_URL = 'https://github.com/settings/personal-access-tokens/new'
 
 export function SignIn({ onSignedIn }: SignInProps) {
   const [token, setToken] = useState('')
-  const [remember, setRemember] = useState(true)
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<GitRelayError | null>(null)
 
@@ -23,8 +22,8 @@ export function SignIn({ onSignedIn }: SignInProps) {
     setError(null)
     try {
       // Verify before storing, so a bad paste never becomes a saved token.
-      const viewer = await getViewer(trimmed)
-      onSignedIn(trimmed, remember, viewer.login)
+      const viewer = await verifyToken(trimmed)
+      onSignedIn(trimmed, viewer.login)
     } catch (err) {
       setError(asGitRelayError(err))
     } finally {
@@ -39,11 +38,16 @@ export function SignIn({ onSignedIn }: SignInProps) {
       </div>
       <p className="hint">
         GitRelay runs entirely in your browser with no server of its own, so it uses a GitHub
-        access token that you provide. The token is stored only on this device and is never sent
-        anywhere except to GitHub.
+        access token that you provide. GitRelay has no backend and never uploads your token
+        anywhere: it is sent only to <span className="mono">api.github.com</span>.
       </p>
+      <ul className="hint security-facts">
+        <li>Kept for this browser tab only, and erased when you close it.</li>
+        <li>Never written to long-term browser storage, and never put in a URL.</li>
+        <li>Signing out removes it immediately.</li>
+      </ul>
 
-      <form className="form" onSubmit={submit} style={{ marginTop: 18 }}>
+      <form className="form gap-top" onSubmit={submit}>
         {error ? <ErrorNotice error={error} /> : null}
 
         <div className="field-group">
@@ -68,18 +72,11 @@ export function SignIn({ onSignedIn }: SignInProps) {
             permissions: <strong>Contents: Read and write</strong> and{' '}
             <strong>Metadata: Read-only</strong>. Adding <strong>Pull requests: Read-only</strong>{' '}
             is optional and shows GitHub's own mergeability answer for your release. A private
-            repository must be selected explicitly in the token's repository list.
+            repository must be selected explicitly in the token's repository list. Grant{' '}
+            <strong>Only select repositories</strong>, never <em>All repositories</em>, and set a
+            short expiry.
           </span>
         </div>
-
-        <label className="check">
-          <input
-            type="checkbox"
-            checked={remember}
-            onChange={(e) => setRemember(e.target.checked)}
-          />
-          Keep me signed in on this device
-        </label>
 
         <button type="submit" className="primary block" disabled={!token.trim() || busy}>
           {busy ? (

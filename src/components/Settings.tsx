@@ -1,12 +1,12 @@
 import { useEffect, useMemo, useState } from 'react'
 import { getRepo, listBranches, type BranchRef } from '../lib/github'
+import { isValidBranch, isValidOwner, isValidRepo } from '../lib/validate'
 import { asGitRelayError, GitRelayError } from '../lib/errors'
 import { type Config } from '../lib/config'
 import { ErrorNotice, Notice } from './Notice'
 import { CloseIcon } from './Icons'
 
 interface SettingsProps {
-  token: string
   config: Config
   login: string | null
   onSave: (config: Config) => void
@@ -14,7 +14,7 @@ interface SettingsProps {
   onSignOut: () => void
 }
 
-export function Settings({ token, config, login, onSave, onCancel, onSignOut }: SettingsProps) {
+export function Settings({ config, login, onSave, onCancel, onSignOut }: SettingsProps) {
   const [draft, setDraft] = useState<Config>(config)
   const [newBranch, setNewBranch] = useState('')
   const [remote, setRemote] = useState<BranchRef[] | null>(null)
@@ -53,8 +53,8 @@ export function Settings({ token, config, login, onSave, onCancel, onSignOut }: 
     setChecking(true)
     setCheckError(null)
     try {
-      const info = await getRepo(token, { owner, repo })
-      const branches = await listBranches(token, { owner, repo })
+      const info = await getRepo({ owner, repo })
+      const branches = await listBranches({ owner, repo })
       setRemote(branches)
       setCheckedRepo(info.fullName)
       setWritable(info.permissions?.push ?? null)
@@ -91,18 +91,32 @@ export function Settings({ token, config, login, onSave, onCancel, onSignOut }: 
 
   const owner = draft.owner.trim()
   const repo = draft.repo.trim()
-  const canSave = Boolean(owner && repo && draft.devBranch.trim() && draft.prodBranch.trim())
+  const devBranch = draft.devBranch.trim()
+  const prodBranch = draft.prodBranch.trim()
+  const trackedBranches = [...new Set(draft.devBranches.map((b) => b.trim()).filter(Boolean))]
+
+  // Every one of these values ends up in a GitHub API path. They are checked
+  // again in the API client, but rejecting them here means an invalid name is
+  // never stored and the reason is visible while it is being typed.
+  const invalid: string | null = !owner
+    ? null
+    : !isValidOwner(owner)
+      ? `"${owner}" is not a valid GitHub owner name.`
+      : repo && !isValidRepo(repo)
+        ? `"${repo}" is not a valid repository name.`
+        : devBranch && !isValidBranch(devBranch)
+          ? `"${devBranch}" is not a valid branch name.`
+          : prodBranch && !isValidBranch(prodBranch)
+            ? `"${prodBranch}" is not a valid branch name.`
+            : (trackedBranches.find((b) => !isValidBranch(b))
+                ? `"${trackedBranches.find((b) => !isValidBranch(b))}" is not a valid branch name.`
+                : null)
+
+  const canSave = Boolean(owner && repo && devBranch && prodBranch) && !invalid
 
   function save() {
     if (!canSave) return
-    onSave({
-      owner,
-      repo,
-      devBranch: draft.devBranch.trim(),
-      prodBranch: draft.prodBranch.trim(),
-      // Drop blanks left behind by renaming, and de-duplicate.
-      devBranches: [...new Set(draft.devBranches.map((b) => b.trim()).filter(Boolean))],
-    })
+    onSave({ owner, repo, devBranch, prodBranch, devBranches: trackedBranches })
   }
 
   return (
@@ -151,7 +165,7 @@ export function Settings({ token, config, login, onSave, onCancel, onSignOut }: 
           {owner || repo ? (
             <span className="hint">
               Will use{' '}
-              <span className="mono" style={{ color: 'var(--text)' }}>
+              <span className="mono text-strong">
                 {owner || 'owner'}/{repo || 'repository'}
               </span>
               {owner && repo && owner === repo
@@ -261,7 +275,7 @@ export function Settings({ token, config, login, onSave, onCancel, onSignOut }: 
             <div className="empty">No developer branches configured yet.</div>
           )}
 
-          <div className="row-inline" style={{ flexWrap: 'nowrap' }}>
+          <div className="row-inline nowrap">
             <input
               type="text"
               placeholder="Add a branch…"
@@ -290,7 +304,7 @@ export function Settings({ token, config, login, onSave, onCancel, onSignOut }: 
           </div>
 
           {suggestions.length ? (
-            <div className="field-group" style={{ gap: 7 }}>
+            <div className="field-group gap-7">
               <span className="hint">Branches in this repository — tap to add:</span>
               <div className="suggest-row">
                 {suggestions.map((name) => (
@@ -309,6 +323,13 @@ export function Settings({ token, config, login, onSave, onCancel, onSignOut }: 
             <span className="hint">Every branch in this repository is already accounted for.</span>
           ) : null}
         </div>
+
+        {invalid ? (
+          <Notice tone="warn" title="Cannot save yet">
+            {invalid} GitRelay puts these names straight into GitHub API
+            requests, so only names GitHub itself accepts are allowed.
+          </Notice>
+        ) : null}
 
         <div className="row">
           {onCancel ? (

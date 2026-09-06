@@ -39,7 +39,7 @@ export function BranchRow({ status, target, repoUrl, onMerge }: BranchRowProps) 
         </div>
 
         {status.error ? (
-          <div className="branch-meta" style={{ color: 'var(--danger)' }}>{status.error}</div>
+          <div className="branch-meta is-error">{status.error}</div>
         ) : comparison ? (
           <div className="branch-meta">
             <span className="counts">
@@ -60,7 +60,7 @@ export function BranchRow({ status, target, repoUrl, onMerge }: BranchRowProps) 
             ) : null}
           </div>
         ) : (
-          <div className="branch-meta"><span className="skeleton" style={{ width: 130 }} /></div>
+          <div className="branch-meta"><span className="skeleton w-130" /></div>
         )}
 
         {status.latestMessage ? (

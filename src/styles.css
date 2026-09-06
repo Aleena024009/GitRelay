@@ -807,3 +807,31 @@ input::placeholder { color: #616d7c; }
 /* A labelled block inside the modal body keeps its heading tight to its list. */
 .section-block { display: flex; flex-direction: column; gap: 7px; min-width: 0; }
 .section-block > .subhead { margin: 0; }
+
+/* ============================================================
+   Layout utilities
+   These exist so no element needs a style attribute: the Content
+   Security Policy forbids inline styles outright.
+   ============================================================ */
+.notice-row { margin-top: 14px; }
+.empty-action { margin-top: 12px; }
+.gap-top { margin-top: 18px; }
+.gap-7 { gap: 7px; }
+.nowrap { flex-wrap: nowrap; }
+.mb-0 { margin-bottom: 0; }
+.text-strong { color: var(--text); }
+.branch-meta.is-error { color: var(--danger); }
+
+.w-38 { width: 38%; }
+.w-40 { width: 40%; }
+.w-58 { width: 58%; }
+.w-60 { width: 60%; }
+.w-85 { width: 85%; }
+.w-110 { width: 110px; }
+.w-130 { width: 130px; }
+
+.security-facts {
+  margin: 10px 0 0;
+  padding-left: 18px;
+}
+.security-facts li { margin-bottom: 3px; }

@@ -2,6 +2,7 @@ export type ErrorKind =
   | 'auth'
   | 'permission'
   | 'not_found'
+  | 'invalid_input'
   | 'branch_missing'
   | 'network'
   | 'rate_limit'

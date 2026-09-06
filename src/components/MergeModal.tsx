@@ -11,11 +11,11 @@ import {
 } from '../lib/github'
 import { asGitRelayError, GitRelayError } from '../lib/errors'
 import { readinessOf, relativeTime, summarizeMergeability } from '../lib/status'
+import { safeGitHubUrl } from '../lib/validate'
 import { Modal } from './Modal'
 import { ErrorNotice, Notice } from './Notice'
 
 interface MergeModalProps {
-  token: string
   repo: RepoRef
   repoUrl: string
   source: string
@@ -42,7 +42,6 @@ interface Preview {
 type Phase = 'loading' | 'ready' | 'merging' | 'conflict' | 'refused' | 'stale'
 
 export function MergeModal({
-  token,
   repo,
   repoUrl,
   source,
@@ -60,9 +59,9 @@ export function MergeModal({
   /** Always pulls live state; a merge is never judged on cached information. */
   const load = useCallback(async (): Promise<Preview | null> => {
     const [sourceBranch, targetBranch, comparison] = await Promise.all([
-      getBranch(token, repo, source),
-      getBranch(token, repo, target),
-      compareBranches(token, repo, target, source),
+      getBranch(repo, source),
+      getBranch(repo, target),
+      compareBranches(repo, target, source),
     ])
     return {
       comparison,
@@ -71,7 +70,7 @@ export function MergeModal({
       targetLatest: targetBranch.latest.message,
       targetDate: targetBranch.latest.date,
     }
-  }, [token, repo, source, target])
+  }, [repo, source, target])
 
   const refresh = useCallback(
     async (nextPhase: Phase = 'ready') => {
@@ -89,10 +88,10 @@ export function MergeModal({
       // Read-only and secondary: the summary above is already usable, and a
       // verdict GitHub cannot give simply leaves the comparison speaking.
       if (checkMergeability) {
-        setMergeability(await getMergeability(token, repo, target, source))
+        setMergeability(await getMergeability(repo, target, source))
       }
     },
-    [load, checkMergeability, token, repo, target, source],
+    [load, checkMergeability, repo, target, source],
   )
 
   useEffect(() => {
@@ -124,7 +123,6 @@ export function MergeModal({
       }
 
       const result = await mergeBranch(
-        token,
         repo,
         target,
         source,
@@ -193,9 +191,9 @@ export function MergeModal({
     >
       {phase === 'loading' ? (
         <div className="stack">
-          <span className="skeleton" style={{ width: '60%' }} />
-          <span className="skeleton" style={{ width: '85%' }} />
-          <span className="skeleton" style={{ width: '40%' }} />
+          <span className="skeleton w-60" />
+          <span className="skeleton w-85" />
+          <span className="skeleton w-40" />
           <p className="muted small-text">Fetching the current state of both branches…</p>
         </div>
       ) : null}
@@ -270,11 +268,11 @@ export function MergeModal({
               title={verdict.blocking ? 'GitHub reports conflicts' : verdict.label}
             >
               {verdict.detail}
-              {mergeability && 'pull' in mergeability ? (
+              {mergeability && 'pull' in mergeability && safeGitHubUrl(mergeability.pull.htmlUrl) ? (
                 <>
                   {' '}
                   <a
-                    href={mergeability.pull.htmlUrl}
+                    href={safeGitHubUrl(mergeability.pull.htmlUrl)!}
                     target="_blank"
                     rel="noreferrer noopener"
                   >

@@ -1,11 +1,20 @@
+/**
+ * The only module that talks to GitHub, and the only one that reads the token.
+ *
+ * Every request is built here, so there is exactly one place where the
+ * Authorization header is attached and exactly one destination it can be
+ * attached to. Callers pass repository and branch names; they never see or
+ * hold the token, which keeps it out of React props, component state and
+ * anything that inspects them.
+ */
 import { GitRelayError, asGitRelayError } from './errors'
+import { clearToken, loadToken } from './auth'
+import { assertBranch, branchSegment, repoPath, type RepoRef } from './validate'
 
-const API = 'https://api.github.com'
+/** The single origin credentials may ever be sent to. */
+const API_ORIGIN = 'https://api.github.com'
 
-export interface RepoRef {
-  owner: string
-  repo: string
-}
+export type { RepoRef }
 
 export interface CommitSummary {
   sha: string
@@ -64,6 +73,21 @@ function toCommitSummary(c: ApiCommit): CommitSummary {
 }
 
 /**
+ * Removes anything token-shaped from text before it is shown or kept.
+ *
+ * GitHub does not echo credentials back, but error text is the one path that
+ * carries raw bytes from a response into the UI, so it is filtered rather than
+ * trusted. Exported so tests can assert the guarantee directly.
+ */
+export function redactSecrets(text: string): string {
+  return text
+    .replace(/gh[pousr]_[A-Za-z0-9]{16,}/g, '[redacted token]')
+    .replace(/github_pat_[A-Za-z0-9_]{16,}/g, '[redacted token]')
+    .replace(/\bBearer\s+[A-Za-z0-9._~+/-]+=*/gi, 'Bearer [redacted]')
+    .replace(/("?authorization"?\s*[:=]\s*)("[^"]*"|\S+)/gi, '$1[redacted]')
+}
+
+/**
  * Turns a non-OK GitHub response into an error whose message can be shown
  * as-is. `subject` names the thing being acted on so 404s can be specific.
  */
@@ -76,9 +100,12 @@ async function toError(res: Response, subject: string): Promise<GitRelayError> {
   } catch {
     /* body was empty or not JSON; raw text is enough for the details pane */
   }
-  const detail = apiMessage || raw || `HTTP ${res.status}`
+  const detail = redactSecrets(apiMessage || raw || `HTTP ${res.status}`)
 
   if (res.status === 401) {
+    // The stored token is no longer usable, so it is dropped immediately
+    // rather than left in storage for the next tab to pick up.
+    clearToken()
     return new GitRelayError(
       'auth',
       'GitHub rejected your access token. It may have expired or been revoked — sign in again with a new token.',
@@ -144,28 +171,65 @@ async function toError(res: Response, subject: string): Promise<GitRelayError> {
   })
 }
 
-async function request<T>(
-  token: string,
-  path: string,
-  subject: string,
-  init: RequestInit = {},
-): Promise<T> {
+interface RequestOptions {
+  method?: string
+  body?: unknown
+  /**
+   * Sign-in only. A candidate token is checked against GitHub before it is
+   * ever written to storage, so that one call has to carry it explicitly.
+   * Every other request reads the stored token itself.
+   */
+  token?: string
+}
+
+async function request<T>(path: string, subject: string, opts: RequestOptions = {}): Promise<T> {
+  const token = opts.token ?? loadToken()
+  if (!token) {
+    throw new GitRelayError('auth', 'You are not signed in. Enter a GitHub token to continue.')
+  }
+
+  // Pin the destination. Paths are built inside this module, but resolving
+  // against a fixed origin and re-checking means no later edit — and no value
+  // that reaches a path — can aim an authenticated request at another host.
+  const url = new URL(path, API_ORIGIN)
+  if (url.origin !== API_ORIGIN) {
+    throw new GitRelayError(
+      'unknown',
+      'Refused to send your token to an unexpected host. This is a bug in GitRelay, not a problem with your repository.',
+    )
+  }
+
   let res: Response
   try {
-    res = await fetch(`${API}${path}`, {
-      ...init,
+    res = await fetch(url, {
+      method: opts.method ?? 'GET',
+      body: opts.body === undefined ? undefined : JSON.stringify(opts.body),
       headers: {
         Accept: 'application/vnd.github+json',
         'X-GitHub-Api-Version': '2022-11-28',
         Authorization: `Bearer ${token}`,
-        ...(init.body ? { 'Content-Type': 'application/json' } : {}),
-        ...init.headers,
+        ...(opts.body === undefined ? {} : { 'Content-Type': 'application/json' }),
       },
       // Merge decisions must never be made from a cached response.
       cache: 'no-store',
+      // The token is the only credential; cookies must never ride along.
+      credentials: 'omit',
+      // Never disclose which page is calling.
+      referrerPolicy: 'no-referrer',
+      mode: 'cors',
     })
   } catch (err) {
     throw asGitRelayError(err)
+  }
+
+  // The browser strips Authorization across a cross-origin redirect, so a
+  // response from elsewhere is not an authenticated answer to our request and
+  // its body is not trusted.
+  if (res.url && new URL(res.url).origin !== API_ORIGIN) {
+    throw new GitRelayError(
+      'unknown',
+      'GitHub redirected this request off api.github.com. Nothing was read from the response.',
+    )
   }
 
   if (!res.ok) throw await toError(res, subject)
@@ -180,14 +244,14 @@ export interface RepoInfo {
   permissions?: { push?: boolean; admin?: boolean }
 }
 
-export async function getRepo(token: string, ref: RepoRef): Promise<RepoInfo> {
+export async function getRepo(ref: RepoRef): Promise<RepoInfo> {
   const slug = `${ref.owner}/${ref.repo}`
   const data = await request<{
     full_name: string
     default_branch: string
     private: boolean
     permissions?: { push?: boolean; admin?: boolean }
-  }>(token, `/repos/${ref.owner}/${ref.repo}`, slug).catch((err: unknown) => {
+  }>(repoPath(ref), slug).catch((err: unknown) => {
     // GitHub answers 404 rather than 403 for private repositories a token
     // cannot see, so a "missing" repo is usually really a missing grant.
     if (err instanceof GitRelayError && err.kind === 'not_found') {
@@ -207,23 +271,24 @@ export async function getRepo(token: string, ref: RepoRef): Promise<RepoInfo> {
   }
 }
 
-/** Confirms the token itself is valid, independently of any repository. */
-export async function getViewer(token: string): Promise<{ login: string; avatarUrl: string }> {
-  const data = await request<{ login: string; avatar_url: string }>(
-    token,
-    '/user',
-    'your GitHub account',
-  )
-  return { login: data.login, avatarUrl: data.avatar_url }
+/**
+ * Confirms a candidate token is valid before it is stored. This is the only
+ * function that accepts a token argument; nothing here writes it anywhere.
+ */
+export async function verifyToken(candidate: string): Promise<{ login: string }> {
+  const data = await request<{ login: string }>('/user', 'your GitHub account', {
+    token: candidate,
+  })
+  return { login: data.login }
 }
 
-export async function listBranches(token: string, ref: RepoRef): Promise<BranchRef[]> {
+export async function listBranches(ref: RepoRef): Promise<BranchRef[]> {
   const out: BranchRef[] = []
+  const base = repoPath(ref)
   // Paginate defensively; repositories with many branches are common.
   for (let page = 1; page <= 10; page++) {
     const batch = await request<{ name: string; commit: { sha: string } }[]>(
-      token,
-      `/repos/${ref.owner}/${ref.repo}/branches?per_page=100&page=${page}`,
+      `${base}/branches?per_page=100&page=${page}`,
       `${ref.owner}/${ref.repo}`,
     )
     out.push(...batch.map((b) => ({ name: b.name, sha: b.commit.sha })))
@@ -233,13 +298,11 @@ export async function listBranches(token: string, ref: RepoRef): Promise<BranchR
 }
 
 export async function getBranch(
-  token: string,
   ref: RepoRef,
   branch: string,
 ): Promise<{ name: string; latest: CommitSummary }> {
   const data = await request<{ name: string; commit: ApiCommit }>(
-    token,
-    `/repos/${ref.owner}/${ref.repo}/branches/${encodeURIComponent(branch)}`,
+    `${repoPath(ref)}/branches/${branchSegment(branch)}`,
     `branch "${branch}"`,
   )
   return { name: data.name, latest: toCommitSummary(data.commit) }
@@ -250,7 +313,6 @@ export async function getBranch(
  * does not have, which is the "commits ahead of dev" the user cares about.
  */
 export async function compareBranches(
-  token: string,
   ref: RepoRef,
   base: string,
   head: string,
@@ -264,8 +326,7 @@ export async function compareBranches(
     files?: { filename: string; status: string; additions: number; deletions: number }[]
     base_commit: { sha: string }
   }>(
-    token,
-    `/repos/${ref.owner}/${ref.repo}/compare/${encodeURIComponent(base)}...${encodeURIComponent(head)}?per_page=100`,
+    `${repoPath(ref)}/compare/${branchSegment(base)}...${branchSegment(head)}?per_page=100`,
     `branch "${base}" or "${head}"`,
   )
 
@@ -297,19 +358,23 @@ export async function compareBranches(
  * `head` is never modified.
  */
 export async function mergeBranch(
-  token: string,
   ref: RepoRef,
   base: string,
   head: string,
   commitMessage: string,
 ): Promise<MergeResult | null> {
+  // Validate both names even though they travel in the body rather than the
+  // path: GitHub should never be asked to act on a ref this app rejects.
+  assertBranch(base)
+  assertBranch(head)
+
   const data = await request<{
     sha: string
     html_url: string
     commit: { message: string; author: { date?: string } | null }
-  } | null>(token, `/repos/${ref.owner}/${ref.repo}/merges`, `branch "${base}"`, {
+  } | null>(`${repoPath(ref)}/merges`, `branch "${base}"`, {
     method: 'POST',
-    body: JSON.stringify({ base, head, commit_message: commitMessage }),
+    body: { base, head, commit_message: commitMessage },
   })
 
   // 204 No Content means base already contained head; nothing was merged.
@@ -374,11 +439,15 @@ export type Mergeability =
 
 /** The open pull request for `head` → `base`, if the user has one. */
 export async function findOpenPullRequest(
-  token: string,
   ref: RepoRef,
   base: string,
   head: string,
 ): Promise<PullSummary | null> {
+  // URLSearchParams escapes the values itself, so these are validated for
+  // shape rather than encoded here; an invalid ref must still never be asked
+  // about.
+  assertBranch(base)
+  assertBranch(head)
   const query = new URLSearchParams({
     state: 'open',
     base,
@@ -388,11 +457,7 @@ export async function findOpenPullRequest(
   })
   const list = await request<
     { number: number; html_url: string; title: string; draft?: boolean }[]
-  >(
-    token,
-    `/repos/${ref.owner}/${ref.repo}/pulls?${query.toString()}`,
-    `pull requests in ${ref.owner}/${ref.repo}`,
-  )
+  >(`${repoPath(ref)}/pulls?${query.toString()}`, `pull requests in ${ref.owner}/${ref.repo}`)
   const pull = list[0]
   if (!pull) return null
   return {
@@ -413,14 +478,13 @@ const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms))
  * `unavailable` rather than an error, since neither is a failure of the merge.
  */
 export async function getMergeability(
-  token: string,
   ref: RepoRef,
   base: string,
   head: string,
   { attempts = 4, delayMs = 800 }: { attempts?: number; delayMs?: number } = {},
 ): Promise<Mergeability> {
   try {
-    const pull = await findOpenPullRequest(token, ref, base, head)
+    const pull = await findOpenPullRequest(ref, base, head)
     if (!pull) return { kind: 'no_pull_request' }
 
     // GitHub computes `mergeable` in the background and answers null until the
@@ -428,8 +492,7 @@ export async function getMergeability(
     for (let attempt = 0; attempt < attempts; attempt++) {
       if (attempt > 0) await sleep(delayMs)
       const data = await request<{ mergeable: boolean | null; mergeable_state?: string }>(
-        token,
-        `/repos/${ref.owner}/${ref.repo}/pulls/${pull.number}`,
+        `${repoPath(ref)}/pulls/${encodeURIComponent(String(pull.number))}`,
         `pull request #${pull.number}`,
       )
       if (data.mergeable === null) continue

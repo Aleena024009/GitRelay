@@ -9,8 +9,9 @@ import {
 } from './lib/github'
 import { asGitRelayError, GitRelayError } from './lib/errors'
 import { emptyConfig, isConfigured, loadConfig, saveConfig, type Config } from './lib/config'
-import { clearToken, loadToken, saveToken } from './lib/auth'
+import { clearToken, hasToken, saveToken } from './lib/auth'
 import { useInstall } from './lib/install'
+import { safeGitHubUrl } from './lib/validate'
 import {
   canMerge,
   readinessOf,
@@ -40,7 +41,9 @@ interface Success {
 }
 
 export default function App() {
-  const [token, setToken] = useState<string | null>(() => loadToken())
+  // Only whether a token exists lives in React state; the value itself stays
+  // in the auth module, so it never reaches props, state or a devtools panel.
+  const [signedIn, setSignedIn] = useState<boolean>(() => hasToken())
   const [login, setLogin] = useState<string | null>(null)
   const [config, setConfig] = useState<Config>(() => loadConfig())
   const [showSettings, setShowSettings] = useState(false)
@@ -64,11 +67,13 @@ export default function App() {
     () => ({ owner: config.owner, repo: config.repo }),
     [config.owner, config.repo],
   )
-  const repoUrl = `https://github.com/${config.owner}/${config.repo}`
+  // Scheme is hardcoded and both segments are encoded, so this can never
+  // become a `javascript:` URL or escape the repository path.
+  const repoUrl = `https://github.com/${encodeURIComponent(config.owner)}/${encodeURIComponent(config.repo)}`
 
   const signOut = useCallback(() => {
     clearToken()
-    setToken(null)
+    setSignedIn(false)
     setLogin(null)
     setStatuses(null)
     setRelease(null)
@@ -96,8 +101,8 @@ export default function App() {
 
       try {
         const [branch, comparison] = await Promise.all([
-          getBranch(token!, repoRef, name),
-          compareBranches(token!, repoRef, config.devBranch, name),
+          getBranch(repoRef, name),
+          compareBranches(repoRef, config.devBranch, name),
         ])
         return {
           ...base,
@@ -112,7 +117,7 @@ export default function App() {
         return { ...base, error: asGitRelayError(err).message }
       }
     },
-    [token, repoRef, config.devBranch, config.owner, config.repo],
+    [signedIn, repoRef, config.devBranch, config.owner, config.repo],
   )
 
   /**
@@ -124,7 +129,7 @@ export default function App() {
     async (run: number) => {
       setLoadingBranches(true)
       try {
-        const remote = await listBranches(token!, repoRef)
+        const remote = await listBranches(repoRef)
         const shaByName = new Map(remote.map((b) => [b.name, b.sha]))
         const branchStatuses = await Promise.all(
           config.devBranches.map((name) =>
@@ -142,7 +147,7 @@ export default function App() {
         if (run === generation.current) setLoadingBranches(false)
       }
     },
-    [token, repoRef, config.devBranches, statusFor, signOut],
+    [signedIn, repoRef, config.devBranches, statusFor, signOut],
   )
 
   /**
@@ -167,9 +172,9 @@ export default function App() {
         // Settled rather than raced, so a missing branch is named precisely
         // instead of the comparison implicating both of them.
         const [dev, prod, compared] = await Promise.allSettled([
-          getBranch(token!, repoRef, config.devBranch),
-          getBranch(token!, repoRef, config.prodBranch),
-          compareBranches(token!, repoRef, config.prodBranch, config.devBranch),
+          getBranch(repoRef, config.devBranch),
+          getBranch(repoRef, config.prodBranch),
+          compareBranches(repoRef, config.prodBranch, config.devBranch),
         ])
         if (dev.status === 'rejected') throw dev.reason
         if (prod.status === 'rejected') throw prod.reason
@@ -191,7 +196,6 @@ export default function App() {
         // Second stage: GitHub's own verdict, which it may take a few seconds
         // to compute. The commit counts above must not wait on it.
         const verdict = await getMergeability(
-          token!,
           repoRef,
           config.prodBranch,
           config.devBranch,
@@ -207,25 +211,25 @@ export default function App() {
         if (run === generation.current) setLoadingRelease(false)
       }
     },
-    [token, repoRef, config.devBranch, config.prodBranch, signOut],
+    [signedIn, repoRef, config.devBranch, config.prodBranch, signOut],
   )
 
   const refresh = useCallback(async () => {
-    if (!token || !configured) return
+    if (!signedIn || !configured) return
     const run = ++generation.current
     setError(null)
     setMergeability(null)
     // Deliberately independent: neither half may hold up or veto the other.
     await Promise.all([refreshBranches(run), refreshRelease(run)])
-  }, [token, configured, refreshBranches, refreshRelease])
+  }, [signedIn, configured, refreshBranches, refreshRelease])
 
   useEffect(() => {
     void refresh()
   }, [refresh])
 
-  function handleSignedIn(newToken: string, remember: boolean, user: string) {
-    saveToken(newToken, remember)
-    setToken(newToken)
+  function handleSignedIn(newToken: string, user: string) {
+    saveToken(newToken)
+    setSignedIn(true)
     setLogin(user)
     if (!configured) setShowSettings(true)
   }
@@ -267,7 +271,7 @@ export default function App() {
     />
   ) : null
 
-  if (!token) {
+  if (!signedIn) {
     return (
       <Shell actions={installButton}>
         <SignIn onSignedIn={handleSignedIn} />
@@ -280,7 +284,6 @@ export default function App() {
     return (
       <Shell actions={installButton}>
         <Settings
-          token={token}
           config={configured ? config : { ...emptyConfig, ...config }}
           login={login}
           onSave={handleSaveConfig}
@@ -344,7 +347,7 @@ export default function App() {
       </div>
 
       {success ? (
-        <div style={{ marginTop: 14 }}>
+        <div className="notice-row">
           <Notice
             tone="success"
             title={success.result ? 'Successfully merged' : 'Already up to date'}
@@ -353,14 +356,18 @@ export default function App() {
               <>
                 <span className="mono">{success.source}</span> →{' '}
                 <span className="mono">{success.target}</span> ·{' '}
-                <a
-                  href={success.result.htmlUrl}
-                  target="_blank"
-                  rel="noreferrer noopener"
-                  className="mono"
-                >
-                  {success.result.sha.slice(0, 7)}
-                </a>{' '}
+                {safeGitHubUrl(success.result.htmlUrl) ? (
+                  <a
+                    href={safeGitHubUrl(success.result.htmlUrl)!}
+                    target="_blank"
+                    rel="noreferrer noopener"
+                    className="mono"
+                  >
+                    {success.result.sha.slice(0, 7)}
+                  </a>
+                ) : (
+                  <span className="mono">{success.result.sha.slice(0, 7)}</span>
+                )}{' '}
                 · {relativeTime(success.at)}. <span className="mono">{success.source}</span> was
                 not modified.
               </>
@@ -375,7 +382,7 @@ export default function App() {
       ) : null}
 
       {error ? (
-        <div style={{ marginTop: 14 }}>
+        <div className="notice-row">
           <ErrorNotice error={error} />
         </div>
       ) : null}
@@ -391,8 +398,8 @@ export default function App() {
           {[0, 1, 2].map((i) => (
             <div className="branch" key={i}>
               <div className="branch-main stack">
-                <span className="skeleton" style={{ width: '38%' }} />
-                <span className="skeleton" style={{ width: '58%' }} />
+                <span className="skeleton w-38" />
+                <span className="skeleton w-58" />
               </div>
             </div>
           ))}
@@ -400,7 +407,7 @@ export default function App() {
       ) : statuses && statuses.length === 0 ? (
         <div className="empty">
           No developer branches configured yet.
-          <div style={{ marginTop: 12 }}>
+          <div className="empty-action">
             <button className="subtle small" onClick={() => setShowSettings(true)}>
               Add branches
             </button>
@@ -456,7 +463,7 @@ export default function App() {
               )}
             </>
           ) : (
-            <span className="skeleton" style={{ width: 110 }} />
+            <span className="skeleton w-110" />
           )}
         </div>
 
@@ -477,7 +484,6 @@ export default function App() {
 
       {pending ? (
         <MergeModal
-          token={token}
           repo={repoRef}
           repoUrl={repoUrl}
           source={pending.source}

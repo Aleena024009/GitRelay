@@ -148,7 +148,7 @@ export function InstallModal({
             ))}
           </ol>
 
-          <p className="muted small-text" style={{ marginBottom: 0 }}>
+          <p className="muted small-text mb-0">
             Works on Android, Windows, macOS, Linux and ChromeOS. Your settings and access token
             stay in this browser profile, so an installed app shares them with this tab.
           </p>

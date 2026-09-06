@@ -28,7 +28,9 @@ Every write GitRelay makes is a single `POST /repos/{owner}/{repo}/merges` call,
 
 GitRelay is a static site on GitHub Pages with no backend of its own. That rules out an OAuth flow: an OAuth app's token exchange needs a client secret with nowhere safe to live, and GitHub's device-flow endpoints do not send CORS headers a browser can use. Both would require running a server.
 
-So you supply a **fine-grained personal access token** at runtime. It is stored only in your browser (`localStorage`, or `sessionStorage` if you untick "keep me signed in") and is sent only to `api.github.com`. No token is in the source, the repository, or the build.
+So you supply a **fine-grained personal access token** at runtime. It is kept in `sessionStorage` — this browser tab only, erased when you close it — and sent only to `api.github.com`. There is no "keep me signed in": GitHub Pages project sites share one origin, so a token in `localStorage` would be readable by every other project page published under the same account. See [SECURITY.md](SECURITY.md) for the full threat model and the limits of what this host can protect.
+
+No token is in the source, the repository, or the build.
 
 Create one at **Settings → Developer settings → [Fine-grained tokens](https://github.com/settings/personal-access-tokens/new)** with:
 
@@ -38,6 +40,8 @@ Create one at **Settings → Developer settings → [Fine-grained tokens](https:
 | Contents | **Read and write** |
 | Metadata | **Read-only** (mandatory, added automatically) |
 | Pull requests | **Read-only** (optional) |
+
+Use a **fine-grained** token, never a classic one — a classic `repo` scope reaches every repository you can see and cannot be narrowed.
 
 `Contents` covers reading branches, comparing them, and merging; `Metadata` covers looking up the repository. `Pull requests` is optional and read-only: it lets GitRelay show GitHub's own mergeability verdict for `dev → main` (see below). Without it everything still works, and the release panel simply falls back to what the branch comparison alone can prove. Set an expiry you are comfortable with — when it expires GitRelay says so and asks you to sign in again.
 
@@ -112,6 +116,22 @@ The release also looks up `dev` and `main` directly rather than searching the re
 
 Immediately before writing, GitRelay re-reads both branch tips. If either moved while the dialog was open, it stops, tells you, and reloads the summary rather than merging against a stale preview.
 
+## Security
+
+The token can read and write real repositories, so the security posture is documented in full in [SECURITY.md](SECURITY.md): where the token is stored, the same-origin limitation of GitHub Pages, the Content Security Policy, and which HTTP headers this host simply cannot set.
+
+The short version:
+
+- The token lives in `sessionStorage`, is touched only by `src/lib/auth.ts`, never enters React state or props, and is sent only to `api.github.com`.
+- A deny-by-default CSP ships with the build — no inline script, no inline style, no third-party origin.
+- Everything GitHub returns is treated as untrusted input.
+- **Known limitation:** GitHub Pages project paths share one browser origin, so `/GitRelay/` gives no storage isolation from other pages under the same account. A dedicated origin is the real fix.
+
+```bash
+npm test      # 97 security and behaviour tests
+npm run verify   # typecheck + build + tests
+```
+
 ## Project layout
 
 ```
@@ -121,8 +141,10 @@ src/
   lib/status.ts    branch readiness + GitHub's mergeability verdict
   lib/config.ts    repository / branch configuration
   lib/auth.ts      token storage (browser only)
+  lib/validate.ts  input validation + safe URL construction
   components/      SignIn, Settings, BranchRow, MergeModal, Modal, Notice
   App.tsx          main screen
+test/              build-output and service-worker assertions
 ```
 
 React + TypeScript + Vite + `vite-plugin-pwa`. No UI framework, no GitHub SDK; ~56 KB gzipped.
