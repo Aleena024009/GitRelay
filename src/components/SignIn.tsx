@@ -66,8 +66,9 @@ export function SignIn({ onSignedIn }: SignInProps) {
             </a>{' '}
             with access limited to the single repository you consolidate, and only these
             permissions: <strong>Contents: Read and write</strong> and{' '}
-            <strong>Metadata: Read-only</strong>. A private repository must be selected explicitly
-            in the token's repository list.
+            <strong>Metadata: Read-only</strong>. Adding <strong>Pull requests: Read-only</strong>{' '}
+            is optional and shows GitHub's own mergeability answer for your release. A private
+            repository must be selected explicitly in the token's repository list.
           </span>
         </div>
 

@@ -2,13 +2,15 @@ import { useCallback, useEffect, useState } from 'react'
 import {
   compareBranches,
   getBranch,
+  getMergeability,
   mergeBranch,
   type Comparison,
+  type Mergeability,
   type MergeResult,
   type RepoRef,
 } from '../lib/github'
 import { asGitRelayError, GitRelayError } from '../lib/errors'
-import { readinessOf, relativeTime } from '../lib/status'
+import { readinessOf, relativeTime, summarizeMergeability } from '../lib/status'
 import { Modal } from './Modal'
 import { ErrorNotice, Notice } from './Notice'
 
@@ -20,6 +22,11 @@ interface MergeModalProps {
   target: string
   /** Wording differs for a release, but the safety path is identical. */
   isRelease?: boolean
+  /**
+   * Ask GitHub for its own mergeability verdict, the one its web interface
+   * shows. Off by default, so a merge into `dev` behaves exactly as before.
+   */
+  checkMergeability?: boolean
   onClose: () => void
   onMerged: (result: MergeResult | null, source: string, target: string) => void
 }
@@ -41,11 +48,13 @@ export function MergeModal({
   source,
   target,
   isRelease = false,
+  checkMergeability = false,
   onClose,
   onMerged,
 }: MergeModalProps) {
   const [phase, setPhase] = useState<Phase>('loading')
   const [preview, setPreview] = useState<Preview | null>(null)
+  const [mergeability, setMergeability] = useState<Mergeability | null>(null)
   const [error, setError] = useState<GitRelayError | null>(null)
 
   /** Always pulls live state; a merge is never judged on cached information. */
@@ -68,15 +77,22 @@ export function MergeModal({
     async (nextPhase: Phase = 'ready') => {
       setPhase('loading')
       setError(null)
+      setMergeability(null)
       try {
         setPreview(await load())
         setPhase(nextPhase)
       } catch (err) {
         setError(asGitRelayError(err))
         setPhase('ready')
+        return
+      }
+      // Read-only and secondary: the summary above is already usable, and a
+      // verdict GitHub cannot give simply leaves the comparison speaking.
+      if (checkMergeability) {
+        setMergeability(await getMergeability(token, repo, target, source))
       }
     },
-    [load],
+    [load, checkMergeability, token, repo, target, source],
   )
 
   useEffect(() => {
@@ -129,9 +145,11 @@ export function MergeModal({
 
   const cmp = preview?.comparison ?? null
   const readiness = cmp ? readinessOf(cmp) : null
+  const verdict = mergeability ? summarizeMergeability(mergeability, source, target) : null
   const busy = phase === 'loading' || phase === 'merging'
   const blocked = phase === 'conflict' || phase === 'stale'
-  const canConfirm = !busy && !blocked && !!cmp && cmp.aheadBy > 0 && !error
+  const canConfirm =
+    !busy && !blocked && !!cmp && cmp.aheadBy > 0 && !error && !verdict?.blocking
 
   const title = isRelease ? `Release ${source} → ${target}` : `Merge ${source} → ${target}`
 
@@ -224,14 +242,36 @@ export function MergeModal({
             </div>
           </div>
 
-          {!blocked && readiness === 'clean' ? (
+          {!blocked && verdict && cmp.aheadBy > 0 ? (
+            <Notice
+              tone={verdict.blocking ? 'error' : verdict.tone === 'ok' ? 'success' : 'info'}
+              title={verdict.blocking ? 'GitHub reports conflicts' : verdict.label}
+            >
+              {verdict.detail}
+              {mergeability && 'pull' in mergeability ? (
+                <>
+                  {' '}
+                  <a
+                    href={mergeability.pull.htmlUrl}
+                    target="_blank"
+                    rel="noreferrer noopener"
+                  >
+                    View #{mergeability.pull.number}
+                  </a>
+                  .
+                </>
+              ) : null}
+            </Notice>
+          ) : null}
+
+          {!blocked && !verdict && readiness === 'clean' ? (
             <Notice tone="success" title="No conflicts possible">
               <span className="mono">{target}</span> has no commits that{' '}
               <span className="mono">{source}</span> is missing, so this merge cannot conflict.
             </Notice>
           ) : null}
 
-          {!blocked && readiness === 'unverified' ? (
+          {!blocked && !verdict && readiness === 'unverified' ? (
             <Notice tone="warn" title="Branches have diverged">
               <span className="mono">{target}</span> has {cmp.behindBy}{' '}
               {cmp.behindBy === 1 ? 'commit' : 'commits'} that <span className="mono">{source}</span>{' '}

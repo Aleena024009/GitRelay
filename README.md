@@ -12,7 +12,7 @@ It is not a GitHub client. There is no issue tracker, no repository browser, no 
 
 - Lists only the developer branches you configure, with commits ahead/behind `dev`, the latest commit, and whether it can merge cleanly.
 - Merges a branch into `dev` in two clicks, after showing you the commits, files, and line counts that will land.
-- Releases `dev` into `main` as a completely separate, explicit action.
+- Releases `dev` into `main` as a completely separate, explicit action, showing GitHub's own mergeability verdict for that pair.
 - Refuses to merge when GitHub reports a conflict, and tells you plainly that nothing was changed.
 
 ## What it will never do
@@ -37,8 +37,9 @@ Create one at **Settings → Developer settings → [Fine-grained tokens](https:
 | Repository access | Only select repositories → *your repo* |
 | Contents | **Read and write** |
 | Metadata | **Read-only** (mandatory, added automatically) |
+| Pull requests | **Read-only** (optional) |
 
-Nothing else. `Contents` covers reading branches, comparing them, and merging; `Metadata` covers looking up the repository. Set an expiry you are comfortable with — when it expires GitRelay says so and asks you to sign in again.
+`Contents` covers reading branches, comparing them, and merging; `Metadata` covers looking up the repository. `Pull requests` is optional and read-only: it lets GitRelay show GitHub's own mergeability verdict for `dev → main` (see below). Without it everything still works, and the release panel simply falls back to what the branch comparison alone can prove. Set an expiry you are comfortable with — when it expires GitRelay says so and asks you to sign in again.
 
 > If you later add a small backend or serverless function, you can swap in the OAuth device flow by replacing `src/lib/auth.ts` and the sign-in screen. Nothing else in the app assumes where the token came from.
 
@@ -87,11 +88,27 @@ Mobile-first and responsive from 320 px upward: branch cards stack and their act
 
 ## How mergeability is determined
 
-GitHub has no read-only "would this merge?" endpoint that does not create a pull request, so GitRelay does not pretend otherwise:
+### Developer branch → `dev`
+
+Inferred from the branch comparison, which is all GitHub will tell you about two branches with no pull request between them:
 
 - **`✓ Ready to merge`** — `dev` has no commits the branch is missing. The merge fast-forwards and *cannot* conflict.
 - **`Diverged`** — both branches moved. The confirmation dialog says so, and GitHub does the real conflict check when you confirm. If it conflicts, the merge is rejected and nothing changes.
 - **`Nothing to merge`** — the branch holds no commits that `dev` lacks. Deliberately not labelled "up to date", since such a branch is often far *behind* `dev`; the ↑/↓ counters show both directions.
+
+### `dev` → `main`
+
+The release asks GitHub for the answer GitHub itself displays. GitHub computes "would these two branches merge?" only for a pull request — that computed value is what you see on a pull request or compare page — so GitRelay reads it from the open `dev → main` pull request when you have one:
+
+- **`✓ Able to merge`** — GitHub test-merged the branches and found no conflicts.
+- **`Conflicts`** — GitHub test-merged them and found conflicting changes. The release button is disabled, exactly as GitHub disables its own.
+- **`Checking…`** — GitHub had not finished computing the answer yet. It is worked out in the background; refresh in a moment.
+
+Reading that verdict never writes. With no open pull request — or with a token that lacks `Pull requests: Read` — GitRelay says nothing it cannot support and falls back to the comparison-derived states above. It will **not** open a pull request to find out.
+
+A conflict is the only verdict that blocks the button. Failing checks and unsatisfied branch protection rules are reported in the panel but left alone: they are properties of the pull request, not of whether the two branches merge, and GitHub enforces them itself at merge time.
+
+The release also looks up `dev` and `main` directly rather than searching the repository's branch listing, so the state — or the sheer number — of unrelated branches can never hold a release back.
 
 Immediately before writing, GitRelay re-reads both branch tips. If either moved while the dialog was open, it stops, tells you, and reloads the summary rather than merging against a stale preview.
 
@@ -101,7 +118,7 @@ Immediately before writing, GitRelay re-reads both branch tips. If either moved 
 src/
   lib/github.ts    GitHub REST client + error mapping
   lib/errors.ts    error kinds with user-facing messages
-  lib/status.ts    branch readiness model
+  lib/status.ts    branch readiness + GitHub's mergeability verdict
   lib/config.ts    repository / branch configuration
   lib/auth.ts      token storage (browser only)
   components/      SignIn, Settings, BranchRow, MergeModal, Modal, Notice

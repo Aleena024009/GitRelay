@@ -407,6 +407,12 @@ button.block { width: 100%; }
 }
 .release-flow .arrow { color: var(--muted); }
 
+/* GitHub's own verdict, spelled out under the pill that summarises it. */
+.release-verdict {
+  margin: -4px 0 12px;
+  line-height: 1.5;
+}
+
 /* ============================================================
    Modal — centred dialog on desktop, bottom sheet on phones
    ============================================================ */

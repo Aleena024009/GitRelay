@@ -1,10 +1,23 @@
-import { useCallback, useEffect, useMemo, useState, type ReactNode } from 'react'
-import { compareBranches, getBranch, listBranches, type MergeResult } from './lib/github'
+import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
+import {
+  compareBranches,
+  getBranch,
+  getMergeability,
+  listBranches,
+  type Mergeability,
+  type MergeResult,
+} from './lib/github'
 import { asGitRelayError, GitRelayError } from './lib/errors'
 import { emptyConfig, isConfigured, loadConfig, saveConfig, type Config } from './lib/config'
 import { clearToken, loadToken, saveToken } from './lib/auth'
 import { useInstall } from './lib/install'
-import { canMerge, readinessOf, relativeTime, type BranchStatus } from './lib/status'
+import {
+  canMerge,
+  readinessOf,
+  relativeTime,
+  summarizeMergeability,
+  type BranchStatus,
+} from './lib/status'
 import { SignIn } from './components/SignIn'
 import { Settings } from './components/Settings'
 import { BranchRow } from './components/BranchRow'
@@ -35,13 +48,18 @@ export default function App() {
 
   const [statuses, setStatuses] = useState<BranchStatus[] | null>(null)
   const [release, setRelease] = useState<BranchStatus | null>(null)
-  const [loading, setLoading] = useState(false)
+  const [mergeability, setMergeability] = useState<Mergeability | null>(null)
+  const [loadingBranches, setLoadingBranches] = useState(false)
+  const [loadingRelease, setLoadingRelease] = useState(false)
   const [error, setError] = useState<GitRelayError | null>(null)
   const [pending, setPending] = useState<MergeTarget | null>(null)
   const [success, setSuccess] = useState<Success | null>(null)
 
   const install = useInstall()
   const configured = isConfigured(config)
+  const loading = loadingBranches || loadingRelease
+  /** Identifies the current refresh so a superseded one cannot write state. */
+  const generation = useRef(0)
   const repoRef = useMemo(
     () => ({ owner: config.owner, repo: config.repo }),
     [config.owner, config.repo],
@@ -54,6 +72,7 @@ export default function App() {
     setLogin(null)
     setStatuses(null)
     setRelease(null)
+    setMergeability(null)
     setShowSettings(false)
   }, [])
 
@@ -96,76 +115,109 @@ export default function App() {
     [token, repoRef, config.devBranch, config.owner, config.repo],
   )
 
-  const refresh = useCallback(async () => {
-    if (!token || !configured) return
-    setLoading(true)
-    setError(null)
-    try {
-      // One listing tells us which configured branches still exist, so a
-      // deleted branch is reported plainly instead of as a stack of 404s.
-      const remote = await listBranches(token, repoRef)
-      const shaByName = new Map(remote.map((b) => [b.name, b.sha]))
-
-      const [branchStatuses, releaseStatus] = await Promise.all([
-        Promise.all(
+  /**
+   * Developer branches → dev. One listing tells us which configured branches
+   * still exist, so a deleted branch is reported plainly instead of as a stack
+   * of 404s.
+   */
+  const refreshBranches = useCallback(
+    async (run: number) => {
+      setLoadingBranches(true)
+      try {
+        const remote = await listBranches(token!, repoRef)
+        const shaByName = new Map(remote.map((b) => [b.name, b.sha]))
+        const branchStatuses = await Promise.all(
           config.devBranches.map((name) =>
             statusFor(name, shaByName.has(name), shaByName.get(name) ?? null),
           ),
-        ),
-        (async (): Promise<BranchStatus> => {
-          const base: BranchStatus = {
-            name: config.devBranch,
-            sha: shaByName.get(config.devBranch) ?? null,
-            readiness: 'missing',
-            comparison: null,
-            latestMessage: '',
-            latestDate: '',
-            latestAuthor: '',
-            error: null,
-          }
-          if (!shaByName.has(config.devBranch) || !shaByName.has(config.prodBranch)) {
-            const missing = !shaByName.has(config.devBranch) ? config.devBranch : config.prodBranch
-            return { ...base, error: `Branch "${missing}" was not found in this repository.` }
-          }
-          try {
-            const [branch, comparison] = await Promise.all([
-              getBranch(token, repoRef, config.devBranch),
-              compareBranches(token, repoRef, config.prodBranch, config.devBranch),
-            ])
-            return {
-              ...base,
-              sha: branch.latest.sha,
-              readiness: readinessOf(comparison),
-              comparison,
-              latestMessage: branch.latest.message,
-              latestDate: branch.latest.date,
-              latestAuthor: branch.latest.authorName,
-            }
-          } catch (err) {
-            return { ...base, error: asGitRelayError(err).message }
-          }
-        })(),
-      ])
+        )
+        if (run !== generation.current) return
+        setStatuses(branchStatuses)
+      } catch (err) {
+        if (run !== generation.current) return
+        const e = asGitRelayError(err)
+        setError(e)
+        if (e.kind === 'auth') signOut()
+      } finally {
+        if (run === generation.current) setLoadingBranches(false)
+      }
+    },
+    [token, repoRef, config.devBranches, statusFor, signOut],
+  )
 
-      setStatuses(branchStatuses)
-      setRelease(releaseStatus)
-    } catch (err) {
-      const e = asGitRelayError(err)
-      setError(e)
-      if (e.kind === 'auth') signOut()
-    } finally {
-      setLoading(false)
-    }
-  }, [
-    token,
-    configured,
-    repoRef,
-    config.devBranches,
-    config.devBranch,
-    config.prodBranch,
-    statusFor,
-    signOut,
-  ])
+  /**
+   * dev → prod. This asks GitHub about exactly these two branches and nothing
+   * else: whether the release can go out must never depend on the repository's
+   * other branches, on their state, or on how many of them there are.
+   */
+  const refreshRelease = useCallback(
+    async (run: number) => {
+      setLoadingRelease(true)
+      const base: BranchStatus = {
+        name: config.devBranch,
+        sha: null,
+        readiness: 'missing',
+        comparison: null,
+        latestMessage: '',
+        latestDate: '',
+        latestAuthor: '',
+        error: null,
+      }
+      try {
+        // Settled rather than raced, so a missing branch is named precisely
+        // instead of the comparison implicating both of them.
+        const [dev, prod, compared] = await Promise.allSettled([
+          getBranch(token!, repoRef, config.devBranch),
+          getBranch(token!, repoRef, config.prodBranch),
+          compareBranches(token!, repoRef, config.prodBranch, config.devBranch),
+        ])
+        if (dev.status === 'rejected') throw dev.reason
+        if (prod.status === 'rejected') throw prod.reason
+        if (compared.status === 'rejected') throw compared.reason
+
+        const branch = dev.value
+        const comparison = compared.value
+        if (run !== generation.current) return
+        setRelease({
+          ...base,
+          sha: branch.latest.sha,
+          readiness: readinessOf(comparison),
+          comparison,
+          latestMessage: branch.latest.message,
+          latestDate: branch.latest.date,
+          latestAuthor: branch.latest.authorName,
+        })
+
+        // Second stage: GitHub's own verdict, which it may take a few seconds
+        // to compute. The commit counts above must not wait on it.
+        const verdict = await getMergeability(
+          token!,
+          repoRef,
+          config.prodBranch,
+          config.devBranch,
+        )
+        if (run !== generation.current) return
+        setMergeability(verdict)
+      } catch (err) {
+        if (run !== generation.current) return
+        const e = asGitRelayError(err)
+        setRelease({ ...base, error: e.message })
+        if (e.kind === 'auth') signOut()
+      } finally {
+        if (run === generation.current) setLoadingRelease(false)
+      }
+    },
+    [token, repoRef, config.devBranch, config.prodBranch, signOut],
+  )
+
+  const refresh = useCallback(async () => {
+    if (!token || !configured) return
+    const run = ++generation.current
+    setError(null)
+    setMergeability(null)
+    // Deliberately independent: neither half may hold up or veto the other.
+    await Promise.all([refreshBranches(run), refreshRelease(run)])
+  }, [token, configured, refreshBranches, refreshRelease])
 
   useEffect(() => {
     void refresh()
@@ -184,6 +236,7 @@ export default function App() {
     setShowSettings(false)
     setStatuses(null)
     setRelease(null)
+    setMergeability(null)
   }
 
   function handleMerged(result: MergeResult | null, source: string, target: string) {
@@ -240,7 +293,11 @@ export default function App() {
   }
 
   const releaseCmp = release?.comparison ?? null
-  const canRelease = release ? canMerge(release.readiness) : false
+  // GitHub's own verdict when it has one; otherwise the comparison stands.
+  const verdict = mergeability
+    ? summarizeMergeability(mergeability, config.devBranch, config.prodBranch)
+    : null
+  const canRelease = release ? canMerge(release.readiness) && !verdict?.blocking : false
 
   return (
     <Shell
@@ -387,6 +444,11 @@ export default function App() {
               </span>
               {releaseCmp.aheadBy === 0 ? (
                 <span className="pill mute">Nothing to release</span>
+              ) : verdict ? (
+                <span className={`pill ${verdict.tone}`}>
+                  {verdict.tone === 'ok' ? '✓ ' : null}
+                  {verdict.label}
+                </span>
               ) : releaseCmp.status === 'diverged' ? (
                 <span className="pill warn">Diverged</span>
               ) : (
@@ -397,6 +459,10 @@ export default function App() {
             <span className="skeleton" style={{ width: 110 }} />
           )}
         </div>
+
+        {verdict && releaseCmp && releaseCmp.aheadBy > 0 ? (
+          <p className="release-verdict muted small-text">{verdict.detail}</p>
+        ) : null}
         <button
           className="primary block"
           disabled={!canRelease}
@@ -417,6 +483,7 @@ export default function App() {
           source={pending.source}
           target={pending.target}
           isRelease={pending.isRelease}
+          checkMergeability={pending.isRelease}
           onClose={() => setPending(null)}
           onMerged={handleMerged}
         />

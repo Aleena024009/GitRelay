@@ -311,3 +311,132 @@ export async function mergeBranch(
     mergedAt: data.commit.author?.date ?? new Date().toISOString(),
   }
 }
+
+/* --------------------------------------------------------------------------
+ * Mergeability
+ *
+ * GitHub only ever computes "would these two branches merge?" in the context
+ * of a pull request, and that computed answer is precisely what its web
+ * interface shows on the pull request and compare pages. GitRelay reads that
+ * answer when a pull request already exists and never opens one to find out,
+ * so asking the question stays a read.
+ * ------------------------------------------------------------------------ */
+
+const MERGEABLE_STATES = [
+  'clean',
+  'dirty',
+  'blocked',
+  'behind',
+  'unstable',
+  'draft',
+  'has_hooks',
+  'unknown',
+] as const
+
+export type MergeableState = (typeof MERGEABLE_STATES)[number]
+
+function toMergeableState(raw: string | undefined): MergeableState {
+  return (MERGEABLE_STATES as readonly string[]).includes(raw ?? '')
+    ? (raw as MergeableState)
+    : 'unknown'
+}
+
+export interface PullSummary {
+  number: number
+  htmlUrl: string
+  title: string
+  draft: boolean
+}
+
+/** What GitHub itself says about merging `head` into `base`, right now. */
+export type Mergeability =
+  /** GitHub has test-merged the branches and they do not conflict. */
+  | { kind: 'mergeable'; state: MergeableState; pull: PullSummary }
+  /** GitHub has test-merged the branches and they conflict. */
+  | { kind: 'conflicting'; state: MergeableState; pull: PullSummary }
+  /** A pull request exists but GitHub had not finished testing it in time. */
+  | { kind: 'computing'; pull: PullSummary }
+  /** No open pull request, so GitHub has no computed answer to read. */
+  | { kind: 'no_pull_request' }
+  /** The answer could not be read; `reason` explains why, in plain words. */
+  | { kind: 'unavailable'; reason: string }
+
+/** The open pull request for `head` → `base`, if the user has one. */
+export async function findOpenPullRequest(
+  token: string,
+  ref: RepoRef,
+  base: string,
+  head: string,
+): Promise<PullSummary | null> {
+  const query = new URLSearchParams({
+    state: 'open',
+    base,
+    // Same-repository branches only; a fork's branch is not what we merge.
+    head: `${ref.owner}:${head}`,
+    per_page: '1',
+  })
+  const list = await request<
+    { number: number; html_url: string; title: string; draft?: boolean }[]
+  >(
+    token,
+    `/repos/${ref.owner}/${ref.repo}/pulls?${query.toString()}`,
+    `pull requests in ${ref.owner}/${ref.repo}`,
+  )
+  const pull = list[0]
+  if (!pull) return null
+  return {
+    number: pull.number,
+    htmlUrl: pull.html_url,
+    title: pull.title,
+    draft: pull.draft ?? false,
+  }
+}
+
+const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms))
+
+/**
+ * Reads GitHub's own mergeability verdict for `head` → `base`.
+ *
+ * This never writes: with no open pull request it reports `no_pull_request`
+ * rather than opening one, and a token that cannot read pull requests yields
+ * `unavailable` rather than an error, since neither is a failure of the merge.
+ */
+export async function getMergeability(
+  token: string,
+  ref: RepoRef,
+  base: string,
+  head: string,
+  { attempts = 4, delayMs = 800 }: { attempts?: number; delayMs?: number } = {},
+): Promise<Mergeability> {
+  try {
+    const pull = await findOpenPullRequest(token, ref, base, head)
+    if (!pull) return { kind: 'no_pull_request' }
+
+    // GitHub computes `mergeable` in the background and answers null until the
+    // background job lands, so a null is "ask again", never "cannot merge".
+    for (let attempt = 0; attempt < attempts; attempt++) {
+      if (attempt > 0) await sleep(delayMs)
+      const data = await request<{ mergeable: boolean | null; mergeable_state?: string }>(
+        token,
+        `/repos/${ref.owner}/${ref.repo}/pulls/${pull.number}`,
+        `pull request #${pull.number}`,
+      )
+      if (data.mergeable === null) continue
+      const state = toMergeableState(data.mergeable_state)
+      return data.mergeable
+        ? { kind: 'mergeable', state, pull }
+        : { kind: 'conflicting', state, pull }
+    }
+    return { kind: 'computing', pull }
+  } catch (err) {
+    const e = asGitRelayError(err)
+    if (e.kind === 'permission' || e.kind === 'not_found') {
+      return {
+        kind: 'unavailable',
+        reason:
+          'Your token cannot read this repository’s pull requests. Add "Pull requests: Read" to it to see GitHub’s own mergeability answer here.',
+      }
+    }
+    return { kind: 'unavailable', reason: e.message }
+  }
+}

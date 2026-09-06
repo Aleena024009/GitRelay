@@ -1,4 +1,4 @@
-import type { Comparison } from './github'
+import type { Comparison, Mergeability } from './github'
 
 export type Readiness =
   | 'clean' // fast-forwardable: a merge cannot conflict
@@ -55,4 +55,70 @@ export function relativeTime(iso: string): string {
   const days = Math.round(hours / 24)
   if (days < 30) return `${days}d ago`
   return new Date(iso).toLocaleDateString()
+}
+
+/* --------------------------------------------------------------------------
+ * GitHub's own mergeability verdict
+ *
+ * `Readiness` above is inferred from a comparison. This is different: it is
+ * the answer GitHub computed by actually test-merging the branches, and it is
+ * worded the way GitHub words it in the web interface. Only a real conflict
+ * blocks: failing checks and unsatisfied protection rules belong to the pull
+ * request, not to whether the two branches merge, so they are reported and
+ * left for GitHub to enforce at merge time.
+ * ------------------------------------------------------------------------ */
+
+export interface MergeabilitySummary {
+  tone: 'ok' | 'warn' | 'err' | 'mute'
+  /** Short pill text. */
+  label: string
+  /** One sentence of explanation, or '' when there is nothing to add. */
+  detail: string
+  /** True only when GitHub has determined the branches conflict. */
+  blocking: boolean
+}
+
+/**
+ * Renders a verdict for display, or null when GitHub has no verdict to give
+ * and the caller should fall back to the comparison-derived readiness.
+ */
+export function summarizeMergeability(
+  mergeability: Mergeability,
+  source: string,
+  target: string,
+): MergeabilitySummary | null {
+  switch (mergeability.kind) {
+    case 'mergeable': {
+      const base = `GitHub test-merged the branches for #${mergeability.pull.number}: ${source} merges into ${target} without conflicts.`
+      return {
+        tone: 'ok',
+        label: 'Able to merge',
+        detail:
+          mergeability.state === 'blocked'
+            ? `${base} A branch protection rule on ${target} may still refuse the merge.`
+            : mergeability.state === 'unstable'
+              ? `${base} Some checks on that pull request are failing, which does not affect whether the branches merge.`
+              : base,
+        blocking: false,
+      }
+    }
+    case 'conflicting':
+      return {
+        tone: 'err',
+        label: 'Conflicts',
+        detail: `GitHub test-merged the branches for #${mergeability.pull.number} and found conflicting changes. ${source} cannot be merged into ${target} until they are resolved.`,
+        blocking: true,
+      }
+    case 'computing':
+      return {
+        tone: 'mute',
+        label: 'Checking…',
+        detail: `GitHub is still working out whether #${mergeability.pull.number} merges cleanly. Refresh in a moment for its answer.`,
+        blocking: false,
+      }
+    // Nothing GitHub-computed exists to show; the comparison stands on its own.
+    case 'no_pull_request':
+    case 'unavailable':
+      return null
+  }
 }
