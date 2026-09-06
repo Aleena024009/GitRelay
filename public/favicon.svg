@@ -1,0 +1,22 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" width="512" height="512">
+  <defs>
+    <!-- userSpaceOnUse: a vertical stroke has a zero-width bbox, which would
+         make an objectBoundingBox gradient degenerate and render nothing. -->
+    <linearGradient id="g" gradientUnits="userSpaceOnUse" x1="96" y1="96" x2="416" y2="416">
+      <stop offset="0" stop-color="#4ade80"/>
+      <stop offset="1" stop-color="#22d3ee"/>
+    </linearGradient>
+  </defs>
+  <g fill="none" stroke="url(#g)" stroke-width="28" stroke-linecap="round">
+    <path d="M112 132 C 112 250, 256 236, 256 300"/>
+    <path d="M256 132 L 256 300"/>
+    <path d="M400 132 C 400 250, 256 236, 256 300"/>
+    <path d="M256 300 L 256 380"/>
+  </g>
+  <g fill="#0d1117" stroke="url(#g)" stroke-width="24">
+    <circle cx="112" cy="122" r="36"/>
+    <circle cx="256" cy="122" r="36"/>
+    <circle cx="400" cy="122" r="36"/>
+  </g>
+  <circle cx="256" cy="398" r="48" fill="url(#g)"/>
+</svg>
