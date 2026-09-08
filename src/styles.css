@@ -337,6 +337,14 @@ button.block { width: 100%; }
   color: var(--muted);
 }
 
+.branch-hint {
+  margin-top: 5px;
+  font-size: 12.5px;
+  line-height: 1.45;
+  color: var(--warn);
+  opacity: 0.9;
+}
+
 .branch-latest {
   margin-top: 5px;
   font-size: 13px;
@@ -551,6 +559,14 @@ button.block { width: 100%; }
 .file-list .delta .a { color: var(--accent-hover); }
 .file-list .delta .d { color: var(--danger); }
 .file-list .delta span:not(.a):not(.d) { color: var(--muted); }
+.file-list a.fname { color: inherit; text-decoration: none; }
+.file-list a.fname:hover { text-decoration: underline; }
+.file-list .where {
+  flex: none;
+  font-size: 12px;
+  color: var(--muted);
+  text-transform: lowercase;
+}
 
 .steps {
   margin: 0;

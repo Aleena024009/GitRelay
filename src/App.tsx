@@ -14,6 +14,7 @@ import { useInstall } from './lib/install'
 import { safeGitHubUrl } from './lib/validate'
 import {
   canMerge,
+  readinessExplanation,
   readinessOf,
   relativeTime,
   summarizeMergeability,
@@ -467,8 +468,19 @@ export default function App() {
           )}
         </div>
 
-        {verdict && releaseCmp && releaseCmp.aheadBy > 0 ? (
-          <p className="release-verdict muted small-text">{verdict.detail}</p>
+        {releaseCmp && releaseCmp.aheadBy > 0 ? (
+          verdict ? (
+            <p className="release-verdict muted small-text">{verdict.detail}</p>
+          ) : releaseCmp.status === 'diverged' ? (
+            <p className="release-verdict muted small-text">
+              {readinessExplanation(
+                'unverified',
+                config.devBranch,
+                config.prodBranch,
+                releaseCmp,
+              )}
+            </p>
+          ) : null
         ) : null}
         <button
           className="primary block"
@@ -489,7 +501,7 @@ export default function App() {
           source={pending.source}
           target={pending.target}
           isRelease={pending.isRelease}
-          checkMergeability={pending.isRelease}
+          checkMergeability
           onClose={() => setPending(null)}
           onMerged={handleMerged}
         />

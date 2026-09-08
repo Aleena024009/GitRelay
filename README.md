@@ -99,7 +99,7 @@ Mobile-first and responsive from 320 px upward: branch cards stack and their act
 Inferred from the branch comparison, which is all GitHub will tell you about two branches with no pull request between them:
 
 - **`✓ Ready to merge`** — `dev` has no commits the branch is missing. The merge fast-forwards and *cannot* conflict.
-- **`Diverged`** — both branches moved. The confirmation dialog says so, and GitHub does the real conflict check when you confirm. If it conflicts, the merge is rejected and nothing changes.
+- **`Diverged`** — both branches moved on after the last commit they shared: the branch has commits `dev` does not, and `dev` has commits the branch does not. The merge combines both sides instead of fast-forwarding, so it *can* conflict. The row spells this out under the label, and the confirmation dialog names the files at stake before you commit to anything. GitHub does the real conflict check when you confirm; if it conflicts, the merge is rejected and nothing changes.
 - **`Nothing to merge`** — the branch holds no commits that `dev` lacks. Deliberately not labelled "up to date", since such a branch is often far *behind* `dev`; the ↑/↓ counters show both directions.
 
 ### `dev` → `main`
@@ -110,9 +110,19 @@ The release asks GitHub for the answer GitHub itself displays. GitHub computes "
 - **`Conflicts`** — GitHub test-merged them and found conflicting changes. The release button is disabled, exactly as GitHub disables its own.
 - **`Checking…`** — GitHub had not finished computing the answer yet. It is worked out in the background; refresh in a moment.
 
+The same verdict is now read for a developer branch merge too, so a conflict GitHub already knows about is on screen before you press the button rather than after.
+
 Reading that verdict never writes. With no open pull request — or with a token that lacks `Pull requests: Read` — GitRelay says nothing it cannot support and falls back to the comparison-derived states above. It will **not** open a pull request to find out.
 
 A conflict is the only verdict that blocks the button. Failing checks and unsatisfied branch protection rules are reported in the panel but left alone: they are properties of the pull request, not of whether the two branches merge, and GitHub enforces them itself at merge time.
+
+### Which files a conflict could be in
+
+GitHub has no API that names the files inside a conflict — the conflict only exists inside a merge it refuses to keep. What it will tell you is what each branch changed since the two parted, and a conflict can only ever land in a file *both* sides touched.
+
+So when branches have diverged, the confirmation dialog compares in both directions and lists that intersection: **Changed on both branches**, with how each side changed each file (`modified`, `removed`, `renamed`, and so on). Renames are matched on the old path as well as the new one. If GitHub then reports a real conflict, the same list is shown as **Where the conflict is** — the conflict is in one of those files, and there is nowhere else it can be.
+
+When the intersection is empty, the dialog says so plainly: the branches diverged, but they changed disjoint files, so there is nothing for Git to reconcile.
 
 The release also looks up `dev` and `main` directly rather than searching the repository's branch listing, so the state — or the sheer number — of unrelated branches can never hold a release back.
 

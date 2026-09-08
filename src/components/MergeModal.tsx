@@ -10,7 +10,14 @@ import {
   type RepoRef,
 } from '../lib/github'
 import { asGitRelayError, GitRelayError } from '../lib/errors'
-import { readinessOf, relativeTime, summarizeMergeability } from '../lib/status'
+import {
+  contestedFiles,
+  readinessExplanation,
+  readinessOf,
+  relativeTime,
+  summarizeMergeability,
+  type ContestedFile,
+} from '../lib/status'
 import { safeGitHubUrl } from '../lib/validate'
 import { Modal } from './Modal'
 import { ErrorNotice, Notice } from './Notice'
@@ -24,7 +31,8 @@ interface MergeModalProps {
   isRelease?: boolean
   /**
    * Ask GitHub for its own mergeability verdict, the one its web interface
-   * shows. Off by default, so a merge into `dev` behaves exactly as before.
+   * shows. It only has one where a pull request is open, so this is a bonus on
+   * top of the comparison, never the thing the dialog depends on.
    */
   checkMergeability?: boolean
   onClose: () => void
@@ -54,6 +62,8 @@ export function MergeModal({
   const [phase, setPhase] = useState<Phase>('loading')
   const [preview, setPreview] = useState<Preview | null>(null)
   const [mergeability, setMergeability] = useState<Mergeability | null>(null)
+  /** Files both branches changed; null while unknown. */
+  const [contested, setContested] = useState<ContestedFile[] | null>(null)
   const [error, setError] = useState<GitRelayError | null>(null)
 
   /** Always pulls live state; a merge is never judged on cached information. */
@@ -77,14 +87,33 @@ export function MergeModal({
       setPhase('loading')
       setError(null)
       setMergeability(null)
+      setContested(null)
+      let loaded: Preview | null
       try {
-        setPreview(await load())
+        loaded = await load()
+        setPreview(loaded)
         setPhase(nextPhase)
       } catch (err) {
         setError(asGitRelayError(err))
         setPhase('ready')
         return
       }
+
+      // Which files the two branches are both holding changes to. Only a
+      // diverged pair has a second side to compare, so nothing else pays for
+      // the extra request.
+      if (loaded && loaded.comparison.status === 'diverged') {
+        try {
+          const reverse = await compareBranches(repo, source, target)
+          setContested(contestedFiles(loaded.comparison.files, reverse.files))
+        } catch {
+          // Supporting detail. Failing to get it must not cost the summary.
+          setContested(null)
+        }
+      } else {
+        setContested([])
+      }
+
       // Read-only and secondary: the summary above is already usable, and a
       // verdict GitHub cannot give simply leaves the comparison speaking.
       if (checkMergeability) {
@@ -113,6 +142,8 @@ export function MergeModal({
         fresh.targetSha !== preview.targetSha
       ) {
         setPreview(fresh)
+        // The file list belonged to the comparison that just went out of date.
+        setContested(null)
         setPhase('stale')
         return
       }
@@ -149,6 +180,8 @@ export function MergeModal({
   const verdict = mergeability ? summarizeMergeability(mergeability, source, target) : null
   const busy = phase === 'loading' || phase === 'merging'
   const blocked = phase === 'conflict' || phase === 'refused' || phase === 'stale'
+  /** A conflict GitHub has actually confirmed, rather than one that is merely possible. */
+  const conflicted = phase === 'conflict' || !!verdict?.blocking
   const canConfirm =
     !busy && !blocked && !!cmp && cmp.aheadBy > 0 && !error && !verdict?.blocking
 
@@ -215,8 +248,10 @@ export function MergeModal({
           <span className="mono">{source}</span> cannot currently be merged into{' '}
           <span className="mono">{target}</span> because the branches have conflicting changes.
           Nothing was changed — <span className="mono">{target}</span> and{' '}
-          <span className="mono">{source}</span> are both exactly as they were. Resolve the
-          conflict in Git, then try again.
+          <span className="mono">{source}</span> are both exactly as they were.
+          {contested?.length
+            ? ' The conflict is in one of the files listed below; resolve it in Git, then try again.'
+            : ' Resolve the conflict in Git, then try again.'}
         </Notice>
       ) : null}
 
@@ -293,10 +328,8 @@ export function MergeModal({
 
           {!blocked && !verdict && readiness === 'unverified' ? (
             <Notice tone="warn" title="Branches have diverged">
-              <span className="mono">{target}</span> has {cmp.behindBy}{' '}
-              {cmp.behindBy === 1 ? 'commit' : 'commits'} that <span className="mono">{source}</span>{' '}
-              does not. GitHub will check for conflicts when you confirm, and will change nothing if
-              it finds any.
+              {readinessExplanation('unverified', source, target, cmp)} GitHub checks for real
+              conflicts when you confirm, and changes nothing if it finds any.
             </Notice>
           ) : null}
 
@@ -305,6 +338,66 @@ export function MergeModal({
               <span className="mono">{target}</span> already contains everything on{' '}
               <span className="mono">{source}</span>.
             </Notice>
+          ) : null}
+
+          {cmp.aheadBy > 0 && contested ? (
+            contested.length === 0 ? (
+              readiness === 'unverified' ? (
+                <Notice tone="success" title="No overlapping files">
+                  The branches diverged, but nothing <span className="mono">{source}</span> changed
+                  was also changed on <span className="mono">{target}</span> since they parted, so
+                  there is nothing for Git to reconcile.
+                </Notice>
+              ) : null
+            ) : (
+              <div className="section-block">
+                <div className="subhead">
+                  {conflicted ? 'Where the conflict is' : 'Changed on both branches'}
+                </div>
+                <p className="muted small-text">
+                  {conflicted ? (
+                    <>
+                      A conflict can only be inside a file both branches changed, so it is in one of
+                      these {contested.length === 1 ? 'files' : `${contested.length} files`}.
+                    </>
+                  ) : (
+                    <>
+                      {contested.length === 1 ? 'This file was' : `These ${contested.length} files were`}{' '}
+                      changed on <span className="mono">{source}</span> and on{' '}
+                      <span className="mono">{target}</span>. Git merges them on its own unless the
+                      same lines moved on both sides — a conflict, if there is one, can only be here.
+                    </>
+                  )}
+                </p>
+                <ul className="file-list">
+                  {contested.map((f) => (
+                    <li key={f.filename}>
+                      <a
+                        className="fname mono"
+                        href={`${repoUrl}/blob/${encodeURIComponent(source)}/${f.filename
+                          .split('/')
+                          .map(encodeURIComponent)
+                          .join('/')}`}
+                        target="_blank"
+                        rel="noreferrer noopener"
+                      >
+                        {f.filename}
+                      </a>
+                      <span className="where" title={`${source}: ${f.onSource} · ${target}: ${f.onTarget}`}>
+                        {f.onSource === f.onTarget
+                          ? f.onSource
+                          : `${f.onSource} / ${f.onTarget}`}
+                      </span>
+                    </li>
+                  ))}
+                </ul>
+                {cmp.filesTruncated ? (
+                  <p className="muted small-text">
+                    GitHub caps each comparison at 300 files, so this list may be incomplete.
+                  </p>
+                ) : null}
+              </div>
+            )
           ) : null}
 
           <div className="section-block">

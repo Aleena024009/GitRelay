@@ -28,6 +28,8 @@ export interface ChangedFile {
   status: string
   additions: number
   deletions: number
+  /** The path this file had before, when GitHub detected a rename. */
+  previousFilename?: string
 }
 
 /** Result of `base...head`, i.e. how `head` relates to `base`. */
@@ -323,7 +325,13 @@ export async function compareBranches(
     behind_by: number
     total_commits: number
     commits: ApiCommit[]
-    files?: { filename: string; status: string; additions: number; deletions: number }[]
+    files?: {
+      filename: string
+      status: string
+      additions: number
+      deletions: number
+      previous_filename?: string
+    }[]
     base_commit: { sha: string }
   }>(
     `${repoPath(ref)}/compare/${branchSegment(base)}...${branchSegment(head)}?per_page=100`,
@@ -335,6 +343,7 @@ export async function compareBranches(
     status: f.status,
     additions: f.additions,
     deletions: f.deletions,
+    ...(f.previous_filename ? { previousFilename: f.previous_filename } : {}),
   }))
   const commits = data.commits.map(toCommitSummary)
 

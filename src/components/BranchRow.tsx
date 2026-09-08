@@ -1,4 +1,11 @@
-import { canMerge, readinessLabel, relativeTime, type BranchStatus } from '../lib/status'
+import {
+  canMerge,
+  readinessExplanation,
+  readinessHint,
+  readinessLabel,
+  relativeTime,
+  type BranchStatus,
+} from '../lib/status'
 import { ArrowDownIcon, ArrowUpIcon, ExternalIcon } from './Icons'
 
 interface BranchRowProps {
@@ -32,7 +39,10 @@ export function BranchRow({ status, target, repoUrl, onMerge }: BranchRowProps) 
       <div className="branch-main">
         <div className="branch-name">
           <span className="mono">{status.name}</span>
-          <span className={`pill ${PILL_TONE[status.readiness]}`}>
+          <span
+            className={`pill ${PILL_TONE[status.readiness]}`}
+            title={readinessExplanation(status.readiness, status.name, target, comparison)}
+          >
             {status.readiness === 'clean' ? '✓ ' : null}
             {readinessLabel(status.readiness)}
           </span>
@@ -62,6 +72,12 @@ export function BranchRow({ status, target, repoUrl, onMerge }: BranchRowProps) 
         ) : (
           <div className="branch-meta"><span className="skeleton w-130" /></div>
         )}
+
+        {status.readiness === 'unverified' && comparison ? (
+          <div className="branch-hint">
+            {readinessHint('unverified', status.name, target, comparison)}
+          </div>
+        ) : null}
 
         {status.latestMessage ? (
           <div className="branch-latest">
