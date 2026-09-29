@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useState } from 'react'
 import {
   compareBranches,
+  fastForwardBranch,
   getBranch,
   getMergeability,
   mergeBranch,
@@ -35,6 +36,12 @@ interface MergeModalProps {
    * top of the comparison, never the thing the dialog depends on.
    */
   checkMergeability?: boolean
+  /**
+   * `merge` writes a merge commit on the target. `fast-forward` only ever
+   * moves the target to the source's tip, creating no commit, and refuses
+   * when the target has commits of its own rather than combining the two.
+   */
+  strategy?: 'merge' | 'fast-forward'
   onClose: () => void
   onMerged: (result: MergeResult | null, source: string, target: string) => void
 }
@@ -47,7 +54,7 @@ interface Preview {
   targetDate: string
 }
 
-type Phase = 'loading' | 'ready' | 'merging' | 'conflict' | 'refused' | 'stale'
+type Phase = 'loading' | 'ready' | 'merging' | 'conflict' | 'refused' | 'stale' | 'diverged'
 
 export function MergeModal({
   repo,
@@ -56,9 +63,11 @@ export function MergeModal({
   target,
   isRelease = false,
   checkMergeability = false,
+  strategy = 'merge',
   onClose,
   onMerged,
 }: MergeModalProps) {
+  const fastForward = strategy === 'fast-forward'
   const [phase, setPhase] = useState<Phase>('loading')
   const [preview, setPreview] = useState<Preview | null>(null)
   const [mergeability, setMergeability] = useState<Mergeability | null>(null)
@@ -116,11 +125,12 @@ export function MergeModal({
 
       // Read-only and secondary: the summary above is already usable, and a
       // verdict GitHub cannot give simply leaves the comparison speaking.
-      if (checkMergeability) {
+      // A fast-forward cannot conflict, so a test-merge verdict has nothing to add.
+      if (checkMergeability && !fastForward) {
         setMergeability(await getMergeability(repo, target, source))
       }
     },
-    [load, checkMergeability, repo, target, source],
+    [load, checkMergeability, fastForward, repo, target, source],
   )
 
   useEffect(() => {
@@ -153,6 +163,17 @@ export function MergeModal({
         return
       }
 
+      if (fastForward) {
+        // Checked here as well as by GitHub: a target with commits of its own
+        // is reported, never merged into or overwritten.
+        if (fresh.comparison.status !== 'ahead') {
+          setPhase('diverged')
+          return
+        }
+        onMerged(await fastForwardBranch(repo, target, fresh.sourceSha), source, target)
+        return
+      }
+
       const result = await mergeBranch(
         repo,
         target,
@@ -165,6 +186,10 @@ export function MergeModal({
       setError(e)
       if (e.kind === 'conflict') {
         setPhase('conflict')
+      } else if (e.kind === 'diverged') {
+        // The target moved between the re-check and the write. GitHub
+        // refused the update, so both branches are exactly as they were.
+        setPhase('diverged')
       } else if (e.kind === 'protected_branch') {
         // GitHub refused the write itself. Retrying cannot help, so the
         // dialog closes off the same way a conflict does.
@@ -179,7 +204,10 @@ export function MergeModal({
   const readiness = cmp ? readinessOf(cmp) : null
   const verdict = mergeability ? summarizeMergeability(mergeability, source, target) : null
   const busy = phase === 'loading' || phase === 'merging'
-  const blocked = phase === 'conflict' || phase === 'refused' || phase === 'stale'
+  /** The target has commits the source lacks, so it cannot just be moved forward. */
+  const cannotFastForward = fastForward && (phase === 'diverged' || cmp?.status === 'diverged')
+  const blocked =
+    phase === 'conflict' || phase === 'refused' || phase === 'stale' || cannotFastForward
   /** A conflict GitHub has actually confirmed, rather than one that is merely possible. */
   const conflicted = phase === 'conflict' || !!verdict?.blocking
   const canConfirm =
@@ -211,7 +239,11 @@ export function MergeModal({
           ) : (
             <button className="primary" onClick={() => void confirmMerge()} disabled={!canConfirm}>
               {phase === 'merging' ? (
-                <span className="icon-btn"><span className="spinner" /> Merging…</span>
+                <span className="icon-btn">
+                  <span className="spinner" /> {fastForward ? 'Updating…' : 'Merging…'}
+                </span>
+              ) : fastForward ? (
+                `Fast-forward ${target} to ${source}`
               ) : isRelease ? (
                 `Merge ${source} → ${target}`
               ) : (
@@ -255,6 +287,17 @@ export function MergeModal({
         </Notice>
       ) : null}
 
+      {cannotFastForward && !busy ? (
+        <Notice tone="error" title="Branches have diverged">
+          <span className="mono">{target}</span> has{' '}
+          {cmp?.behindBy ? `${cmp.behindBy} commit${cmp.behindBy === 1 ? '' : 's'}` : 'commits'} that{' '}
+          <span className="mono">{source}</span> does not, so it cannot be moved forward to{' '}
+          <span className="mono">{source}</span> without discarding them. GitRelay never does that,
+          and nothing was changed. Bring <span className="mono">{source}</span> up to date with{' '}
+          <span className="mono">{target}</span> first, then try again.
+        </Notice>
+      ) : null}
+
       {phase === 'refused' && error ? (
         <>
           <ErrorNotice error={error} />
@@ -272,7 +315,7 @@ export function MergeModal({
             on GitHub and merge it there.
           </p>
         </>
-      ) : error && phase !== 'conflict' ? (
+      ) : error && phase !== 'conflict' && phase !== 'diverged' ? (
         <ErrorNotice error={error} />
       ) : null}
 
@@ -326,7 +369,7 @@ export function MergeModal({
             </Notice>
           ) : null}
 
-          {!blocked && !verdict && readiness === 'unverified' ? (
+          {!blocked && !verdict && !fastForward && readiness === 'unverified' ? (
             <Notice tone="warn" title="Branches have diverged">
               {readinessExplanation('unverified', source, target, cmp)} GitHub checks for real
               conflicts when you confirm, and changes nothing if it finds any.
@@ -462,7 +505,17 @@ export function MergeModal({
           ) : null}
 
           <p className="muted small-text">
-            This creates a merge commit on <span className="mono">{target}</span>.{' '}
+            {fastForward ? (
+              <>
+                This moves <span className="mono">{target}</span> to the latest commit on{' '}
+                <span className="mono">{source}</span> without creating a merge commit, so both
+                branches end up on the same commit.
+              </>
+            ) : (
+              <>
+                This creates a merge commit on <span className="mono">{target}</span>.
+              </>
+            )}{' '}
             <span className="mono">{source}</span> is not modified or deleted.
           </p>
         </>

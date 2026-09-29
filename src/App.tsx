@@ -32,6 +32,7 @@ interface MergeTarget {
   source: string
   target: string
   isRelease: boolean
+  strategy: 'merge' | 'fast-forward'
 }
 
 interface Success {
@@ -53,6 +54,11 @@ export default function App() {
   const [statuses, setStatuses] = useState<BranchStatus[] | null>(null)
   const [release, setRelease] = useState<BranchStatus | null>(null)
   const [mergeability, setMergeability] = useState<Mergeability | null>(null)
+  /**
+   * How many files the production-only commits change, or null when unknown.
+   * Zero means they are merge commits that carry no code — history, not work.
+   */
+  const [prodOnlyFiles, setProdOnlyFiles] = useState<number | null>(null)
   const [loadingBranches, setLoadingBranches] = useState(false)
   const [loadingRelease, setLoadingRelease] = useState(false)
   const [error, setError] = useState<GitRelayError | null>(null)
@@ -79,6 +85,7 @@ export default function App() {
     setStatuses(null)
     setRelease(null)
     setMergeability(null)
+    setProdOnlyFiles(null)
     setShowSettings(false)
   }, [])
 
@@ -194,6 +201,18 @@ export default function App() {
           latestAuthor: branch.latest.authorName,
         })
 
+        // What the production-only commits actually change. Old release merge
+        // commits add commits to count but no code, and that is worth saying.
+        if (comparison.behindBy > 0) {
+          const reverse = await compareBranches(
+            repoRef,
+            config.devBranch,
+            config.prodBranch,
+          ).catch(() => null)
+          if (run !== generation.current) return
+          setProdOnlyFiles(reverse ? reverse.files.length : null)
+        }
+
         // Second stage: GitHub's own verdict, which it may take a few seconds
         // to compute. The commit counts above must not wait on it.
         const verdict = await getMergeability(
@@ -220,6 +239,7 @@ export default function App() {
     const run = ++generation.current
     setError(null)
     setMergeability(null)
+    setProdOnlyFiles(null)
     // Deliberately independent: neither half may hold up or veto the other.
     await Promise.all([refreshBranches(run), refreshRelease(run)])
   }, [signedIn, configured, refreshBranches, refreshRelease])
@@ -242,6 +262,7 @@ export default function App() {
     setStatuses(null)
     setRelease(null)
     setMergeability(null)
+    setProdOnlyFiles(null)
   }
 
   function handleMerged(result: MergeResult | null, source: string, target: string) {
@@ -301,7 +322,13 @@ export default function App() {
   const verdict = mergeability
     ? summarizeMergeability(mergeability, config.devBranch, config.prodBranch)
     : null
-  const canRelease = release ? canMerge(release.readiness) && !verdict?.blocking : false
+  // A release only ever fast-forwards production, so a diverged pair is never
+  // released: combining the two sides is left to an explicit merge into dev.
+  const releaseDiverged = releaseCmp?.status === 'diverged'
+  const canRelease = release
+    ? canMerge(release.readiness) && !releaseDiverged && !verdict?.blocking
+    : false
+  const devBehind = !!releaseCmp && releaseCmp.behindBy > 0
 
   return (
     <Shell
@@ -351,7 +378,13 @@ export default function App() {
         <div className="notice-row">
           <Notice
             tone="success"
-            title={success.result ? 'Successfully merged' : 'Already up to date'}
+            title={
+              !success.result
+                ? 'Already up to date'
+                : success.result.kind === 'fast-forward'
+                  ? 'Fast-forwarded'
+                  : 'Successfully merged'
+            }
           >
             {success.result ? (
               <>
@@ -369,8 +402,17 @@ export default function App() {
                 ) : (
                   <span className="mono">{success.result.sha.slice(0, 7)}</span>
                 )}{' '}
-                · {relativeTime(success.at)}. <span className="mono">{success.source}</span> was
-                not modified.
+                · {relativeTime(success.at)}.{' '}
+                {success.result.kind === 'fast-forward' ? (
+                  <>
+                    <span className="mono">{success.target}</span> now points at the same commit as{' '}
+                    <span className="mono">{success.source}</span>; no merge commit was created.
+                  </>
+                ) : (
+                  <>
+                    <span className="mono">{success.source}</span> was not modified.
+                  </>
+                )}
               </>
             ) : (
               <>
@@ -424,7 +466,7 @@ export default function App() {
               repoUrl={repoUrl}
               onMerge={(source) => {
                 setSuccess(null)
-                setPending({ source, target: config.devBranch, isRelease: false })
+                setPending({ source, target: config.devBranch, isRelease: false, strategy: 'merge' })
               }}
             />
           ))}
@@ -452,6 +494,8 @@ export default function App() {
               </span>
               {releaseCmp.aheadBy === 0 ? (
                 <span className="pill mute">Nothing to release</span>
+              ) : releaseDiverged ? (
+                <span className="pill warn">Diverged</span>
               ) : verdict ? (
                 <span className={`pill ${verdict.tone}`}>
                   {verdict.tone === 'ok' ? '✓ ' : null}
@@ -468,26 +512,57 @@ export default function App() {
           )}
         </div>
 
-        {releaseCmp && releaseCmp.aheadBy > 0 ? (
-          verdict ? (
-            <p className="release-verdict muted small-text">{verdict.detail}</p>
-          ) : releaseCmp.status === 'diverged' ? (
-            <p className="release-verdict muted small-text">
-              {readinessExplanation(
-                'unverified',
-                config.devBranch,
-                config.prodBranch,
-                releaseCmp,
-              )}
-            </p>
-          ) : null
+        {releaseCmp && releaseDiverged ? (
+          <p className="release-verdict muted small-text">
+            {readinessExplanation('unverified', config.devBranch, config.prodBranch, releaseCmp)}{' '}
+            {prodOnlyFiles === 0
+              ? `${config.prodBranch}'s extra commits change no files — they are merge commits from earlier releases. `
+              : ''}
+            A release only moves {config.prodBranch} forward, so merge {config.prodBranch} into{' '}
+            {config.devBranch} first; the release can then fast-forward.
+          </p>
+        ) : releaseCmp && releaseCmp.aheadBy > 0 ? (
+          verdict ? <p className="release-verdict muted small-text">{verdict.detail}</p> : null
+        ) : releaseCmp && devBehind ? (
+          <p className="release-verdict muted small-text">
+            {prodOnlyFiles === 0
+              ? `${config.devBranch} and ${config.prodBranch} hold identical code. The ${releaseCmp.behindBy} commits only on ${config.prodBranch} change no files — they are merge commits left by earlier releases. Update ${config.devBranch} to match ${config.prodBranch} to clear them.`
+              : `${config.prodBranch} has ${releaseCmp.behindBy} commits that ${config.devBranch} does not${
+                  prodOnlyFiles ? `, changing ${prodOnlyFiles} file${prodOnlyFiles === 1 ? '' : 's'}` : ''
+                }. Update ${config.devBranch} to match ${config.prodBranch} so the next release can fast-forward.`}
+          </p>
+        ) : null}
+        {releaseCmp && devBehind ? (
+          <button
+            className="subtle small block release-sync"
+            onClick={() => {
+              setSuccess(null)
+              setPending({
+                source: config.prodBranch,
+                target: config.devBranch,
+                isRelease: false,
+                // dev with nothing of its own can simply move forward; dev with
+                // work of its own needs production merged in, never overwritten.
+                strategy: releaseCmp.aheadBy === 0 ? 'fast-forward' : 'merge',
+              })
+            }}
+          >
+            {releaseCmp.aheadBy === 0
+              ? `Update ${config.devBranch} to match ${config.prodBranch}`
+              : `Merge ${config.prodBranch} into ${config.devBranch}`}
+          </button>
         ) : null}
         <button
           className="primary block"
           disabled={!canRelease}
           onClick={() => {
             setSuccess(null)
-            setPending({ source: config.devBranch, target: config.prodBranch, isRelease: true })
+            setPending({
+              source: config.devBranch,
+              target: config.prodBranch,
+              isRelease: true,
+              strategy: 'fast-forward',
+            })
           }}
         >
           Release {config.devBranch} → {config.prodBranch}
@@ -501,6 +576,7 @@ export default function App() {
           source={pending.source}
           target={pending.target}
           isRelease={pending.isRelease}
+          strategy={pending.strategy}
           checkMergeability
           onClose={() => setPending(null)}
           onMerged={handleMerged}

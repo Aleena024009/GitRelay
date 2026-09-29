@@ -7,6 +7,7 @@ export type ErrorKind =
   | 'network'
   | 'rate_limit'
   | 'conflict'
+  | 'diverged'
   | 'protected_branch'
   | 'stale'
   | 'nothing_to_do'

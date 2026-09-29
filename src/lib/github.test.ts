@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { saveToken } from './auth'
 import {
   compareBranches,
+  fastForwardBranch,
   getBranch,
   listBranches,
   mergeBranch,
@@ -180,5 +181,56 @@ describe('error detail is filtered before it can be displayed', () => {
     stubFetch({ message: 'Bad credentials' }, 401)
     await getBranch(REF, 'dev').catch(() => undefined)
     expect(sessionStorage.getItem('gitrelay.token.v1')).toBeNull()
+  })
+})
+
+describe('releasing by fast-forward', () => {
+  const SHA = 'a'.repeat(40)
+
+  it('moves the branch with a non-forced ref update and creates no commit', async () => {
+    stubFetch({ ref: 'refs/heads/main', object: { sha: SHA } })
+    const result = await fastForwardBranch(REF, 'main', SHA)
+
+    expect(calls).toHaveLength(1)
+    expect(calls[0].init.method).toBe('PATCH')
+    expect(new URL(calls[0].url).pathname).toBe('/repos/octocat/example-repo/git/refs/heads/main')
+    expect(JSON.parse(String(calls[0].init.body))).toEqual({ sha: SHA, force: false })
+    expect(result.kind).toBe('fast-forward')
+    expect(result.sha).toBe(SHA)
+    expect(result.htmlUrl).toBe(`https://github.com/octocat/example-repo/commit/${SHA}`)
+  })
+
+  it('never merges: the merges endpoint is not called', async () => {
+    stubFetch({ ref: 'refs/heads/main', object: { sha: SHA } })
+    await fastForwardBranch(REF, 'main', SHA)
+    expect(calls.some((c) => c.url.includes('/merges'))).toBe(false)
+  })
+
+  it('reports a refused non-fast-forward as divergence', async () => {
+    stubFetch({ message: 'Update is not a fast forward' }, 422)
+    await expect(fastForwardBranch(REF, 'main', SHA)).rejects.toMatchObject({
+      kind: 'diverged',
+      status: 422,
+    })
+  })
+
+  it('reports a protected branch as itself', async () => {
+    stubFetch({ message: 'Protected branch update failed for refs/heads/main.' }, 422)
+    await expect(fastForwardBranch(REF, 'main', SHA)).rejects.toMatchObject({
+      kind: 'protected_branch',
+    })
+  })
+
+  it('refuses anything but a full SHA before touching the network', async () => {
+    stubFetch({})
+    await expect(fastForwardBranch(REF, 'main', 'dev')).rejects.toMatchObject({
+      kind: 'invalid_input',
+    })
+    expect(calls).toHaveLength(0)
+  })
+
+  it('does not report success when GitHub points the branch somewhere else', async () => {
+    stubFetch({ ref: 'refs/heads/main', object: { sha: 'b'.repeat(40) } })
+    await expect(fastForwardBranch(REF, 'main', SHA)).rejects.toMatchObject({ kind: 'unknown' })
   })
 })

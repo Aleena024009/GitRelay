@@ -54,6 +54,11 @@ export interface BranchRef {
 }
 
 export interface MergeResult {
+  /**
+   * `merge` wrote a new merge commit on the target; `fast-forward` moved the
+   * target to a commit the source already had, so no commit was created.
+   */
+  kind: 'merge' | 'fast-forward'
   sha: string
   htmlUrl: string
   message: string
@@ -158,6 +163,27 @@ async function toError(res: Response, subject: string): Promise<GitRelayError> {
       detail,
       status: res.status,
     })
+  }
+
+  if (res.status === 422) {
+    // The ref endpoint answers 422 when a non-forced update would lose commits
+    // on the target. That is the whole point of asking for a fast-forward, so
+    // it is reported as divergence, never retried as a force.
+    if (/fast[\s-]?forward/i.test(apiMessage)) {
+      return new GitRelayError(
+        'diverged',
+        `${subject} has commits the other branch does not, so it cannot simply be moved forward. Nothing was changed.`,
+        { detail, status: res.status },
+      )
+    }
+    if (/protected/i.test(apiMessage)) {
+      const reason = apiMessage.replace(/\s+/g, ' ').trim()
+      return new GitRelayError(
+        'protected_branch',
+        `GitHub refused to update ${subject} — ${reason} Nothing was changed. This is a branch protection rule, not a problem with the branches themselves.`,
+        { detail, status: res.status },
+      )
+    }
   }
 
   if (res.status >= 500) {
@@ -390,10 +416,57 @@ export async function mergeBranch(
   if (!data) return null
 
   return {
+    kind: 'merge',
     sha: data.sha,
     htmlUrl: data.html_url,
     message: data.commit.message.split('\n')[0],
     mergedAt: data.commit.author?.date ?? new Date().toISOString(),
+  }
+}
+
+const FULL_SHA = /^[0-9a-f]{40}$/
+
+/**
+ * Moves `branch` forward to `sha` without creating a commit.
+ *
+ * This is a plain ref update with `force: false`, so GitHub itself enforces
+ * that `sha` descends from the branch's current tip: if the branch has any
+ * commit `sha` does not contain — including one pushed a moment ago — the
+ * update is refused with a `diverged` error and nothing changes. Passing the
+ * exact SHA that was reviewed, rather than a branch name, means what lands is
+ * precisely what the user saw.
+ */
+export async function fastForwardBranch(
+  ref: RepoRef,
+  branch: string,
+  sha: string,
+): Promise<MergeResult> {
+  if (!FULL_SHA.test(sha)) {
+    throw new GitRelayError('invalid_input', `"${sha}" is not a full commit SHA, so ${branch} was not moved.`)
+  }
+
+  const data = await request<{ object: { sha: string } }>(
+    `${repoPath(ref)}/git/refs/heads/${branchSegment(branch)}`,
+    `branch "${branch}"`,
+    { method: 'PATCH', body: { sha, force: false } },
+  )
+
+  // GitHub answered, but not with the commit it was asked to point at; say so
+  // rather than report a release that may not be what was reviewed.
+  if (data.object.sha !== sha) {
+    throw new GitRelayError(
+      'unknown',
+      `GitHub moved ${branch} to ${data.object.sha.slice(0, 7)} rather than ${sha.slice(0, 7)}. Refresh and check the branch on GitHub.`,
+    )
+  }
+
+  const repoSlug = `${encodeURIComponent(ref.owner)}/${encodeURIComponent(ref.repo)}`
+  return {
+    kind: 'fast-forward',
+    sha,
+    htmlUrl: `https://github.com/${repoSlug}/commit/${sha}`,
+    message: '',
+    mergedAt: new Date().toISOString(),
   }
 }
 
