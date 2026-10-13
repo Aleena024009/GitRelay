@@ -234,3 +234,29 @@ describe('releasing by fast-forward', () => {
     await expect(fastForwardBranch(REF, 'main', SHA)).rejects.toMatchObject({ kind: 'unknown' })
   })
 })
+
+describe('a refused merge is not called a conflict', () => {
+  it('reports GitHub’s "Merge conflict" as a conflict', async () => {
+    stubFetch({ message: 'Merge conflict' }, 409)
+    await expect(mergeBranch(REF, 'dev', 'feature', 'msg')).rejects.toMatchObject({
+      kind: 'conflict',
+    })
+  })
+
+  it('reports a repository ruleset as a branch rule, with GitHub’s reason', async () => {
+    stubFetch(
+      { message: 'Repository rule violations found\n\nChanges must be made through a pull request.' },
+      409,
+    )
+    const err = await mergeBranch(REF, 'dev', 'feature', 'msg').catch((e: unknown) => e)
+    expect(err).toMatchObject({ kind: 'protected_branch' })
+    expect((err as Error).message).toContain('Changes must be made through a pull request.')
+  })
+
+  it('reports any other 409 as a refusal, never a conflict', async () => {
+    stubFetch({ message: 'Git Repository is empty.' }, 409)
+    await expect(mergeBranch(REF, 'dev', 'feature', 'msg')).rejects.toMatchObject({
+      kind: 'refused',
+    })
+  })
+})

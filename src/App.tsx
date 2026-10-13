@@ -11,6 +11,7 @@ import { asGitRelayError, GitRelayError } from './lib/errors'
 import { emptyConfig, isConfigured, loadConfig, saveConfig, type Config } from './lib/config'
 import { clearToken, hasToken, saveToken } from './lib/auth'
 import { useInstall } from './lib/install'
+import { showNotification, useNotifications } from './lib/notify'
 import { safeGitHubUrl } from './lib/validate'
 import {
   canMerge,
@@ -34,6 +35,18 @@ interface MergeTarget {
   isRelease: boolean
   strategy: 'merge' | 'fast-forward'
 }
+
+/** What a refresh last saw of a branch, so the next one can tell what changed. */
+interface Seen {
+  sha: string | null
+  aheadBy: number
+  conflicting: boolean
+}
+
+/** How often an open GitRelay checks GitHub while notifications are on. */
+const POLL_MS = 2 * 60 * 1000
+/** Coming back to the app refreshes it, unless it refreshed this recently. */
+const STALE_MS = 60 * 1000
 
 interface Success {
   source: string
@@ -66,6 +79,10 @@ export default function App() {
   const [success, setSuccess] = useState<Success | null>(null)
 
   const install = useInstall()
+  const notifications = useNotifications()
+  /** Last refresh's view of the branches; null until the first one lands. */
+  const seen = useRef<{ key: string; branches: Map<string, Seen>; release: Seen | null } | null>(null)
+  const lastRefresh = useRef(0)
   const configured = isConfigured(config)
   const loading = loadingBranches || loadingRelease
   /** Identifies the current refresh so a superseded one cannot write state. */
@@ -78,16 +95,96 @@ export default function App() {
   // become a `javascript:` URL or escape the repository path.
   const repoUrl = `https://github.com/${encodeURIComponent(config.owner)}/${encodeURIComponent(config.repo)}`
 
-  const signOut = useCallback(() => {
+  /**
+   * Ends the session in place, used when GitHub rejects the token mid-use so
+   * the sign-in screen can still say why. Every piece of repository state is
+   * dropped, and any refresh still in flight is told it no longer counts.
+   */
+  const endSession = useCallback(() => {
     clearToken()
+    generation.current++
+    seen.current = null
     setSignedIn(false)
     setLogin(null)
     setStatuses(null)
     setRelease(null)
     setMergeability(null)
     setProdOnlyFiles(null)
+    setPending(null)
+    setSuccess(null)
     setShowSettings(false)
   }, [])
+
+  /**
+   * Signing out reloads the app, so nothing from the last session — branch
+   * state, an open dialog, a request still in flight — outlives the token.
+   */
+  const signOut = useCallback(() => {
+    clearToken()
+    window.location.reload()
+  }, [])
+
+  /**
+   * Notifies about what changed since the last refresh. The first refresh of
+   * a repository only records what it saw: everything is "new" to it.
+   */
+  const noticeChanges = useCallback(
+    (branches: BranchStatus[] | null, rel: BranchStatus | null) => {
+      const key = `${config.owner}/${config.repo}:${config.devBranch}>${config.prodBranch}`
+      const prev = seen.current?.key === key ? seen.current : null
+      const next = { key, branches: new Map(prev?.branches), release: prev?.release ?? null }
+      // Only worth interrupting someone who is not already looking at the app.
+      const away = document.visibilityState === 'hidden' || !document.hasFocus()
+      const say = (title: string, body: string, tag: string) => {
+        if (prev && away) void showNotification(title, body, tag)
+      }
+
+      for (const b of branches ?? []) {
+        if (b.error || !b.comparison) continue
+        const now: Seen = {
+          sha: b.sha,
+          aheadBy: b.comparison.aheadBy,
+          conflicting: b.mergeability?.kind === 'conflicting',
+        }
+        const was = prev?.branches.get(b.name)
+        if (was && now.sha !== was.sha && now.aheadBy > 0) {
+          say(
+            `${b.name} has new commits`,
+            `${b.latestAuthor}: ${b.latestMessage}\n${
+              b.readiness === 'clean'
+                ? `Ready to merge into ${config.devBranch}.`
+                : `Diverged from ${config.devBranch}; the merge may conflict.`
+            }`,
+            `branch:${b.name}`,
+          )
+        }
+        if (was && now.conflicting && !was.conflicting) {
+          say(
+            `${b.name} conflicts with ${config.devBranch}`,
+            `GitHub found conflicting changes. Resolve them before merging.`,
+            `conflict:${b.name}`,
+          )
+        }
+        next.branches.set(b.name, now)
+      }
+
+      if (rel?.comparison && !rel.error) {
+        const now: Seen = { sha: rel.sha, aheadBy: rel.comparison.aheadBy, conflicting: false }
+        const was = prev?.release
+        if (was && now.sha !== was.sha && now.aheadBy > 0) {
+          say(
+            `${config.devBranch} is ready to release`,
+            `${now.aheadBy} commit${now.aheadBy === 1 ? '' : 's'} on ${config.devBranch} not yet on ${config.prodBranch}.`,
+            'release',
+          )
+        }
+        next.release = now
+      }
+
+      seen.current = next
+    },
+    [config.owner, config.repo, config.devBranch, config.prodBranch],
+  )
 
   /** Builds one branch's status from live GitHub state. */
   const statusFor = useCallback(
@@ -112,10 +209,19 @@ export default function App() {
           getBranch(repoRef, name),
           compareBranches(repoRef, config.devBranch, name),
         ])
+        const readiness = readinessOf(comparison)
+        // A diverged branch might conflict. When it has an open pull request,
+        // GitHub has already test-merged it, so its answer is shown on the row
+        // directly instead of only after a merge is attempted.
+        const mergeability =
+          readiness === 'unverified'
+            ? await getMergeability(repoRef, config.devBranch, name, { attempts: 2 })
+            : null
         return {
           ...base,
           sha: branch.latest.sha,
-          readiness: readinessOf(comparison),
+          readiness,
+          mergeability,
           comparison,
           latestMessage: branch.latest.message,
           latestDate: branch.latest.date,
@@ -146,16 +252,17 @@ export default function App() {
         )
         if (run !== generation.current) return
         setStatuses(branchStatuses)
+        noticeChanges(branchStatuses, null)
       } catch (err) {
         if (run !== generation.current) return
         const e = asGitRelayError(err)
         setError(e)
-        if (e.kind === 'auth') signOut()
+        if (e.kind === 'auth') endSession()
       } finally {
         if (run === generation.current) setLoadingBranches(false)
       }
     },
-    [signedIn, repoRef, config.devBranches, statusFor, signOut],
+    [signedIn, repoRef, config.devBranches, statusFor, endSession, noticeChanges],
   )
 
   /**
@@ -191,7 +298,7 @@ export default function App() {
         const branch = dev.value
         const comparison = compared.value
         if (run !== generation.current) return
-        setRelease({
+        const nextRelease: BranchStatus = {
           ...base,
           sha: branch.latest.sha,
           readiness: readinessOf(comparison),
@@ -199,7 +306,9 @@ export default function App() {
           latestMessage: branch.latest.message,
           latestDate: branch.latest.date,
           latestAuthor: branch.latest.authorName,
-        })
+        }
+        setRelease(nextRelease)
+        noticeChanges(null, nextRelease)
 
         // What the production-only commits actually change. Old release merge
         // commits add commits to count but no code, and that is worth saying.
@@ -226,17 +335,18 @@ export default function App() {
         if (run !== generation.current) return
         const e = asGitRelayError(err)
         setRelease({ ...base, error: e.message })
-        if (e.kind === 'auth') signOut()
+        if (e.kind === 'auth') endSession()
       } finally {
         if (run === generation.current) setLoadingRelease(false)
       }
     },
-    [signedIn, repoRef, config.devBranch, config.prodBranch, signOut],
+    [signedIn, repoRef, config.devBranch, config.prodBranch, endSession, noticeChanges],
   )
 
   const refresh = useCallback(async () => {
     if (!signedIn || !configured) return
     const run = ++generation.current
+    lastRefresh.current = Date.now()
     setError(null)
     setMergeability(null)
     setProdOnlyFiles(null)
@@ -247,6 +357,23 @@ export default function App() {
   useEffect(() => {
     void refresh()
   }, [refresh])
+
+  // Coming back to the app shows current state, not what it saw when it was
+  // left. With notifications on, it also keeps checking while in the background.
+  useEffect(() => {
+    if (!signedIn || !configured) return
+    const onVisible = () => {
+      if (document.visibilityState === 'visible' && Date.now() - lastRefresh.current > STALE_MS) {
+        void refresh()
+      }
+    }
+    document.addEventListener('visibilitychange', onVisible)
+    const poll = notifications.enabled ? window.setInterval(() => void refresh(), POLL_MS) : null
+    return () => {
+      document.removeEventListener('visibilitychange', onVisible)
+      if (poll !== null) window.clearInterval(poll)
+    }
+  }, [signedIn, configured, refresh, notifications.enabled])
 
   function handleSignedIn(newToken: string, user: string) {
     saveToken(newToken)
@@ -311,6 +438,7 @@ export default function App() {
           onSave={handleSaveConfig}
           onCancel={configured ? () => setShowSettings(false) : null}
           onSignOut={signOut}
+          notifications={notifications}
         />
         {installModal}
       </Shell>

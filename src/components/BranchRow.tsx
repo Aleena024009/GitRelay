@@ -4,8 +4,10 @@ import {
   readinessHint,
   readinessLabel,
   relativeTime,
+  summarizeMergeability,
   type BranchStatus,
 } from '../lib/status'
+import { safeGitHubUrl } from '../lib/validate'
 import { ArrowDownIcon, ArrowUpIcon, ExternalIcon } from './Icons'
 
 interface BranchRowProps {
@@ -24,7 +26,13 @@ const PILL_TONE = {
 
 export function BranchRow({ status, target, repoUrl, onMerge }: BranchRowProps) {
   const { comparison } = status
-  const mergeable = canMerge(status.readiness)
+  const verdict = status.mergeability
+    ? summarizeMergeability(status.mergeability, status.name, target)
+    : null
+  const pull =
+    status.mergeability && 'pull' in status.mergeability ? status.mergeability.pull : null
+  // A conflict GitHub has confirmed blocks the button: the merge would only be refused.
+  const mergeable = canMerge(status.readiness) && !verdict?.blocking
 
   return (
     <div
@@ -39,13 +47,20 @@ export function BranchRow({ status, target, repoUrl, onMerge }: BranchRowProps) 
       <div className="branch-main">
         <div className="branch-name">
           <span className="mono">{status.name}</span>
-          <span
-            className={`pill ${PILL_TONE[status.readiness]}`}
-            title={readinessExplanation(status.readiness, status.name, target, comparison)}
-          >
-            {status.readiness === 'clean' ? '✓ ' : null}
-            {readinessLabel(status.readiness)}
-          </span>
+          {verdict ? (
+            <span className={`pill ${verdict.tone}`} title={verdict.detail}>
+              {verdict.tone === 'ok' ? '✓ ' : null}
+              {verdict.label}
+            </span>
+          ) : (
+            <span
+              className={`pill ${PILL_TONE[status.readiness]}`}
+              title={readinessExplanation(status.readiness, status.name, target, comparison)}
+            >
+              {status.readiness === 'clean' ? '✓ ' : null}
+              {readinessLabel(status.readiness)}
+            </span>
+          )}
         </div>
 
         {status.error ? (
@@ -73,7 +88,9 @@ export function BranchRow({ status, target, repoUrl, onMerge }: BranchRowProps) 
           <div className="branch-meta"><span className="skeleton w-130" /></div>
         )}
 
-        {status.readiness === 'unverified' && comparison ? (
+        {verdict ? (
+          <div className={`branch-hint ${verdict.blocking ? 'is-error' : 'is-muted'}`}>{verdict.detail}</div>
+        ) : status.readiness === 'unverified' && comparison ? (
           <div className="branch-hint">
             {readinessHint('unverified', status.name, target, comparison)}
           </div>
@@ -91,6 +108,16 @@ export function BranchRow({ status, target, repoUrl, onMerge }: BranchRowProps) 
           <button className="primary" onClick={() => onMerge(status.name)}>
             Merge to {target}
           </button>
+        ) : verdict?.blocking && pull && safeGitHubUrl(pull.htmlUrl) ? (
+          <a
+            className="btn-a"
+            href={safeGitHubUrl(pull.htmlUrl)!}
+            target="_blank"
+            rel="noreferrer noopener"
+            title={`Resolve the conflicts in #${pull.number} on GitHub`}
+          >
+            Resolve <ExternalIcon />
+          </a>
         ) : status.readiness === 'missing' ? (
           <button className="subtle" disabled>Unavailable</button>
         ) : (

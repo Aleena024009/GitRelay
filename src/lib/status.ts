@@ -16,6 +16,11 @@ export interface BranchStatus {
   latestDate: string
   latestAuthor: string
   error: string | null
+  /**
+   * GitHub's own test-merge answer, read from an open pull request when one
+   * exists. Only asked for diverged branches; anything else cannot conflict.
+   */
+  mergeability?: Mergeability | null
 }
 
 export function readinessOf(comparison: Comparison): Readiness {

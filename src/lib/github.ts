@@ -148,21 +148,30 @@ async function toError(res: Response, subject: string): Promise<GitRelayError> {
   }
 
   if (res.status === 409) {
-    // A 409 is not always a conflict. GitHub refuses a direct merge into a
-    // protected branch with this same status, and calling that a "conflict"
-    // sends people hunting for conflicting changes that do not exist.
-    if (/protected branch/i.test(apiMessage)) {
-      const reason = apiMessage.replace(/\s+/g, ' ').trim()
+    // A 409 is not always a conflict. GitHub answers a merge it will not make
+    // with this same status — a protected branch, a repository ruleset that
+    // requires a pull request — and calling those a "conflict" sends people
+    // hunting for conflicting changes that do not exist. Only GitHub's own
+    // "Merge conflict" answer is reported as one.
+    if (/merge conflict/i.test(apiMessage)) {
+      return new GitRelayError('conflict', 'The branches have conflicts and cannot be merged automatically.', {
+        detail,
+        status: res.status,
+      })
+    }
+    const reason = apiMessage.replace(/\s+/g, ' ').trim() || `HTTP ${res.status}.`
+    if (/protected branch|rule/i.test(apiMessage)) {
       return new GitRelayError(
         'protected_branch',
-        `GitHub refused this merge — ${reason} Nothing was changed. This is a branch protection rule on the target branch, not a conflict between the branches.`,
+        `GitHub refused this merge — ${reason} Nothing was changed. This is a rule on the target branch (branch protection or a repository ruleset), not a conflict between the branches.`,
         { detail, status: res.status },
       )
     }
-    return new GitRelayError('conflict', 'The branches have conflicts and cannot be merged automatically.', {
-      detail,
-      status: res.status,
-    })
+    return new GitRelayError(
+      'refused',
+      `GitHub refused this merge — ${reason} Nothing was changed. GitHub did not report a conflict between the branches.`,
+      { detail, status: res.status },
+    )
   }
 
   if (res.status === 422) {

@@ -5,6 +5,7 @@ import { asGitRelayError, GitRelayError } from '../lib/errors'
 import { type Config } from '../lib/config'
 import { ErrorNotice, Notice } from './Notice'
 import { CloseIcon } from './Icons'
+import type { useNotifications } from '../lib/notify'
 
 interface SettingsProps {
   config: Config
@@ -12,9 +13,17 @@ interface SettingsProps {
   onSave: (config: Config) => void
   onCancel: (() => void) | null
   onSignOut: () => void
+  notifications: ReturnType<typeof useNotifications>
 }
 
-export function Settings({ config, login, onSave, onCancel, onSignOut }: SettingsProps) {
+export function Settings({
+  config,
+  login,
+  onSave,
+  onCancel,
+  onSignOut,
+  notifications,
+}: SettingsProps) {
   const [draft, setDraft] = useState<Config>(config)
   const [newBranch, setNewBranch] = useState('')
   const [remote, setRemote] = useState<BranchRef[] | null>(null)
@@ -340,6 +349,47 @@ export function Settings({ config, login, onSave, onCancel, onSignOut }: Setting
           <button type="button" className="primary" onClick={save} disabled={!canSave}>
             Save
           </button>
+        </div>
+
+        <div className="divider" />
+        <div className="field-group">
+          <label>Notifications</label>
+          <span className="hint">
+            Get a notification on this device when a developer branch has new commits, when GitHub
+            finds a conflict, or when {draft.devBranch.trim() || 'dev'} is ready to release.
+            GitRelay checks every two minutes while it is open, including in the background. It has
+            no server, so nothing arrives once the app is closed.
+          </span>
+          {notifications.permission === 'unsupported' ? (
+            <Notice tone="info" title="Not available here">
+              This browser cannot show notifications. On iPhone and iPad, install GitRelay to the
+              Home Screen first, then turn them on from the installed app.
+            </Notice>
+          ) : notifications.permission === 'denied' ? (
+            <Notice tone="warn" title="Blocked by the browser">
+              Notifications are blocked for this site. Allow them in the browser’s site settings
+              (the icon beside the address bar, or the app’s info page on a phone), then come back.
+            </Notice>
+          ) : (
+            <div className="row-inline">
+              {notifications.enabled ? (
+                <>
+                  <span className="pill ok">✓ On</span>
+                  <button type="button" className="subtle small" onClick={notifications.disable}>
+                    Turn off
+                  </button>
+                </>
+              ) : (
+                <button
+                  type="button"
+                  className="subtle small"
+                  onClick={() => void notifications.enable()}
+                >
+                  Turn on notifications
+                </button>
+              )}
+            </div>
+          )}
         </div>
 
         <div className="divider" />

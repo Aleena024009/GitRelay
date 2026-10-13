@@ -96,6 +96,9 @@ export default defineConfig({
           },
         ],
         cleanupOutdatedCaches: true,
+        // Notification clicks are handled by the service worker, so the
+        // handler is pulled in from public/ next to the generated worker.
+        importScripts: ['sw-notifications.js'],
       },
       devOptions: { enabled: false },
     }),

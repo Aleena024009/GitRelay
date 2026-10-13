@@ -190,7 +190,7 @@ export function MergeModal({
         // The target moved between the re-check and the write. GitHub
         // refused the update, so both branches are exactly as they were.
         setPhase('diverged')
-      } else if (e.kind === 'protected_branch') {
+      } else if (e.kind === 'protected_branch' || e.kind === 'refused') {
         // GitHub refused the write itself. Retrying cannot help, so the
         // dialog closes off the same way a conflict does.
         setPhase('refused')
@@ -302,8 +302,12 @@ export function MergeModal({
         <>
           <ErrorNotice error={error} />
           <p className="muted small-text">
-            A merge commit pushed straight to <span className="mono">{target}</span> is not what
-            that rule allows.{' '}
+            {error.kind === 'protected_branch' ? (
+              <>
+                A merge commit pushed straight to <span className="mono">{target}</span> is not
+                what that rule allows.{' '}
+              </>
+            ) : null}
             <a
               href={`${repoUrl}/compare/${encodeURIComponent(target)}...${encodeURIComponent(source)}`}
               target="_blank"

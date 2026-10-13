@@ -50,7 +50,9 @@ function errorTitle(kind: GitRelayError['kind']): string {
     case 'conflict':
       return 'Merge conflict'
     case 'protected_branch':
-      return 'Blocked by branch protection'
+      return 'Blocked by a branch rule'
+    case 'refused':
+      return 'GitHub refused the merge'
     case 'stale':
       return 'Branch changed'
     default:

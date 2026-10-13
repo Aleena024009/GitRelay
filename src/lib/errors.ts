@@ -9,6 +9,7 @@ export type ErrorKind =
   | 'conflict'
   | 'diverged'
   | 'protected_branch'
+  | 'refused'
   | 'stale'
   | 'nothing_to_do'
   | 'unknown'
